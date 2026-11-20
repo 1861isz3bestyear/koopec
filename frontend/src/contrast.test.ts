@@ -1,27 +1,55 @@
-import { readFileSync } from "node:fs";
 import { beforeAll, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 
-function luminance(color: string): number {
-  const match = color.match(/\d+(?:\.\d+)?/g);
-  if (!match || match.length < 3)
-    throw new Error(`Unsupported color: ${color}`);
-  const channels = match
-    .slice(0, 3)
-    .map(Number)
-    .map((value) => {
-      const channel = value / 255;
-      return channel <= 0.04045
-        ? channel / 12.92
-        : ((channel + 0.055) / 1.055) ** 2.4;
-    });
-  return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
-}
-function contrast(foreground: string, background: string): number {
-  const [lighter, darker] = [luminance(foreground), luminance(background)].sort(
-    (a, b) => b - a,
-  );
-  return (lighter! + 0.05) / (darker! + 0.05);
-}
+const aaContrast = 4.5,
+  blueWeight = 0.0722,
+  channelCount = 3,
+  channelThreshold = 0.04045,
+  emptyTotal = 0,
+  exponent = 2.4,
+  greenWeight = 0.7152,
+  linearDivisor = 12.92,
+  maximumChannel = 255,
+  nonlinearDivisor = 1.055,
+  nonlinearOffset = 0.055,
+  offset = 0.05,
+  redWeight = 0.2126,
+  relativeLuminance = (color: string): number => {
+    const match = color.match(/\d+(?:\.\d+)?/gu);
+    if (!match || match.length < channelCount) {
+      throw new Error(`Unsupported color: ${color}`);
+    }
+    return match
+      .slice(emptyTotal, channelCount)
+      .reduce((total, value, index) => {
+        const channel = Number(value) / maximumChannel,
+          weight = [redWeight, greenWeight, blueWeight].at(index);
+        if (typeof weight !== "number") {
+          throw new Error("Missing luminance weight");
+        }
+        if (channel <= channelThreshold) {
+          return total + (weight * channel) / linearDivisor;
+        }
+        return (
+          total +
+          weight * ((channel + nonlinearOffset) / nonlinearDivisor) ** exponent
+        );
+      }, emptyTotal);
+  },
+  styleOf = (selector: string): CSSStyleDeclaration => {
+    const element = document.querySelector(selector);
+    if (!element) {
+      throw new Error(`Missing element: ${selector}`);
+    }
+    return getComputedStyle(element);
+  },
+  textContrast = (foreground: string, background: string): number => {
+    const first = relativeLuminance(foreground),
+      second = relativeLuminance(background);
+    return (
+      (Math.max(first, second) + offset) / (Math.min(first, second) + offset)
+    );
+  };
 beforeAll(() => {
   const style = document.createElement("style");
   style.textContent = readFileSync("src/style.css", "utf8");
@@ -30,33 +58,27 @@ beforeAll(() => {
     '<main><header><p>Text</p><span class="badge">Status</span></header><section class="panel"><span class="eyebrow">Label</span><p class="hint">Hint</p><button>Button</button><textarea>Input</textarea><pre>Output</pre><small>Caption</small></section><footer>Footer</footer></main>';
 });
 it("enforces at least WCAG AA 4.5:1 for UI text against its effective background", () => {
-  const root = getComputedStyle(document.documentElement);
-  const panel = getComputedStyle(document.querySelector(".panel")!);
+  const panel = styleOf(".panel"),
+    root = getComputedStyle(document.documentElement);
   for (const [selector, background] of [
     ["header p", root.backgroundColor],
     [".badge", root.backgroundColor],
     [".eyebrow", panel.backgroundColor],
     [".hint", panel.backgroundColor],
-    [
-      "button",
-      getComputedStyle(document.querySelector("button")!).backgroundColor,
-    ],
-    [
-      "textarea",
-      getComputedStyle(document.querySelector("textarea")!).backgroundColor,
-    ],
-    ["pre", getComputedStyle(document.querySelector("pre")!).backgroundColor],
+    ["button", styleOf("button").backgroundColor],
+    ["textarea", styleOf("textarea").backgroundColor],
+    ["pre", styleOf("pre").backgroundColor],
     ["small", panel.backgroundColor],
     ["footer", root.backgroundColor],
   ] as const) {
     expect(
-      contrast(
-        getComputedStyle(document.querySelector(selector)!).color,
-        background,
-      ),
+      textContrast(styleOf(selector).color, background),
       selector,
-    ).toBeGreaterThanOrEqual(4.5);
+    ).toBeGreaterThanOrEqual(aaContrast);
   }
 });
-it("rejects a low contrast combination", () =>
-  expect(contrast("rgb(128,128,128)", "rgb(130,130,130)")).toBeLessThan(4.5));
+it("rejects a low contrast combination", () => {
+  expect(textContrast("rgb(128,128,128)", "rgb(130,130,130)")).toBeLessThan(
+    aaContrast,
+  );
+});

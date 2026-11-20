@@ -1,9 +1,11 @@
-import { createChart, CandlestickSeries } from "lightweight-charts";
-import { isExposureResponse, parseCandles } from "./data";
 import "./style.css";
+import { CandlestickSeries, createChart } from "lightweight-charts";
+import { isExposureResponse, parseCandles } from "./data";
 
 const root = document.querySelector<HTMLDivElement>("#app");
-if (!root) throw new Error("Application root is missing");
+if (!root) {
+  throw new Error("Application root is missing");
+}
 root.innerHTML = `
   <main>
     <header>
@@ -37,67 +39,109 @@ root.innerHTML = `
     <footer>Rust backend · Lightweight Charts</footer>
   </main>
 `;
-const element = <T extends HTMLElement>(selector: string): T =>
-  document.querySelector<T>(selector)!;
-const container = element<HTMLDivElement>("#chart");
-const chart = createChart(container, {
-  autoSize: true,
-  height: 360,
-  layout: { background: { color: "#111b25" }, textColor: "#a4b4c2" },
-  grid: { vertLines: { color: "#1c2b37" }, horzLines: { color: "#1c2b37" } },
-  rightPriceScale: { borderColor: "#263948" },
-  timeScale: { borderColor: "#263948" },
-});
-const candles = chart.addSeries(CandlestickSeries, {
-  upColor: "#47d3a0",
-  downColor: "#f4827e",
-  borderVisible: false,
-  wickUpColor: "#47d3a0",
-  wickDownColor: "#f4827e",
-});
-element<HTMLInputElement>("#file").addEventListener("change", async (event) => {
-  const file = (event.currentTarget as HTMLInputElement).files?.[0];
-  if (!file) return;
-  try {
-    candles.setData(parseCandles(await file.text()));
-    chart.timeScale().fitContent();
-    element("#chart-message").textContent = `Loaded ${file.name}`;
-  } catch (error) {
-    element("#chart-message").textContent =
-      error instanceof Error ? error.message : "Unable to read CSV.";
-  }
-});
-element<HTMLFormElement>("#form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const result = element("#result");
-  try {
-    const input: unknown = JSON.parse(
-      element<HTMLTextAreaElement>("#snapshot").value,
-    );
-    const response = await fetch("/v1/options/exposure", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
+{
+  const assertElement = (selector: string): HTMLElement => {
+      const found = document.querySelector<HTMLElement>(selector);
+      if (!found) {
+        throw new Error(`Missing element: ${selector}`);
+      }
+      return found;
+    },
+    chart = createChart(assertElement("#chart"), {
+      autoSize: true,
+      grid: {
+        horzLines: { color: "#1c2b37" },
+        vertLines: { color: "#1c2b37" },
+      },
+      height: 360,
+      layout: { background: { color: "#111b25" }, textColor: "#a4b4c2" },
+      rightPriceScale: { borderColor: "#263948" },
+      timeScale: { borderColor: "#263948" },
+    }),
+    chartCandles = chart.addSeries(CandlestickSeries, {
+      borderVisible: false,
+      downColor: "#f4827e",
+      upColor: "#47d3a0",
+      wickDownColor: "#f4827e",
+      wickUpColor: "#47d3a0",
+    }),
+    fileIndex = 0,
+    indentation = 2,
+    message = (error: unknown, fallback: string): string => {
+      if (error instanceof Error) {
+        return error.message;
+      }
+      return fallback;
+    },
+    parseExposure = async (response: Response): Promise<string> => {
+      const value: unknown = await response.json();
+      if (!isExposureResponse(value)) {
+        throw new Error("The backend returned an unexpected response.");
+      }
+      return JSON.stringify(value, null, indentation);
+    },
+    readFile = async (event: Event): Promise<void> => {
+      const file = (event.currentTarget as HTMLInputElement).files?.[fileIndex];
+      if (!file) {
+        return;
+      }
+      try {
+        chartCandles.setData(parseCandles(await file.text()));
+        chart.timeScale().fitContent();
+        assertElement("#chart-message").textContent = `Loaded ${file.name}`;
+      } catch (error) {
+        assertElement("#chart-message").textContent = message(
+          error,
+          "Unable to read CSV.",
+        );
+      }
+    },
+    requestExposure = async (): Promise<string> => {
+      const input: unknown = JSON.parse(
+          (assertElement("#snapshot") as HTMLTextAreaElement).value,
+        ),
+        response = await fetch("/v1/options/exposure", {
+          body: JSON.stringify(input),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        });
+      if (!response.ok) {
+        throw new Error(
+          `Calculation failed (${String(response.status)}). Check your snapshot.`,
+        );
+      }
+      return parseExposure(response);
+    },
+    submitForm = async (): Promise<void> => {
+      try {
+        assertElement("#result").textContent = await requestExposure();
+      } catch (error) {
+        assertElement("#result").textContent = message(
+          error,
+          "Calculation failed.",
+        );
+      }
+    };
+  assertElement("#file").addEventListener("change", (event) => {
+    readFile(event).catch((error: unknown) => {
+      throw error;
     });
-    if (!response.ok)
-      throw new Error(
-        `Calculation failed (${response.status}). Check your snapshot.`,
-      );
-    const value: unknown = await response.json();
-    if (!isExposureResponse(value))
-      throw new Error("The backend returned an unexpected response.");
-    result.textContent = JSON.stringify(value, null, 2);
-  } catch (error) {
-    result.textContent =
-      error instanceof Error ? error.message : "Calculation failed.";
-  }
-});
-fetch("/v1/health")
-  .then((response) => {
-    element("#status").textContent = response.ok
-      ? "Backend connected"
-      : "Backend unavailable";
-  })
-  .catch(() => {
-    element("#status").textContent = "Backend unavailable";
   });
+  assertElement("#form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitForm().catch((error: unknown) => {
+      throw error;
+    });
+  });
+  fetch("/v1/health")
+    .then((response) => {
+      if (response.ok) {
+        assertElement("#status").textContent = "Backend connected";
+      } else {
+        assertElement("#status").textContent = "Backend unavailable";
+      }
+    })
+    .catch(() => {
+      assertElement("#status").textContent = "Backend unavailable";
+    });
+}

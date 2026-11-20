@@ -121,12 +121,3 @@ async fn options_exposure_distinguishes_zero_expiry_and_invalid_requests() {
     input["contracts"][0]["kind"] = "invalid".into();
     assert_eq!(send(input).await.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
-
-#[test]
-fn typescript_contract_reflects_json_number_and_enum_representations() {
-    let types = http_api::options::typescript();
-    assert!(types.contains("\"call\" | \"put\""));
-    assert!(types.contains("observed_at: number"));
-    assert!(types.contains("expiry: number"));
-    assert!(types.contains("strikes: Array<Strike>"));
-}

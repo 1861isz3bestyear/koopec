@@ -1,5 +1,5 @@
 export type Kind = "call" | "put";
-export type Contract = {
+export interface Contract {
   id: string;
   kind: Kind;
   strike: number;
@@ -7,17 +7,21 @@ export type Contract = {
   iv: number;
   open_interest: number;
   multiplier: number;
-};
-export type ExposureRequest = {
+}
+export interface ExposureRequest {
   observed_at: number;
   available_at: number;
   valued_at: number;
   spot: number;
-  contracts: Array<Contract>;
-};
-export type Strike = { strike: number; call: number; put: number };
-export type ExposureResponse = {
+  contracts: Contract[];
+}
+export interface Strike {
+  strike: number;
+  call: number;
+  put: number;
+}
+export interface ExposureResponse {
   signed: number;
   absolute: number;
-  strikes: Array<Strike>;
-};
+  strikes: Strike[];
+}

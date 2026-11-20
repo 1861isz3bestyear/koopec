@@ -1,67 +1,129 @@
-import type { ExposureResponse } from "./api-types";
 import type { CandlestickData, UTCTimestamp } from "lightweight-charts";
-
-export function parseCandles(text: string): CandlestickData<UTCTimestamp>[] {
-  const lines = text.trim().split(/\r?\n/);
-  const header = lines
-    .shift()
-    ?.split(",")
-    .map((x) => x.trim().toLowerCase());
-  if (!header || header.join(",") !== "time,open,high,low,close")
-    throw new Error("CSV columns must be time,open,high,low,close.");
-  if (lines.length === 0 || lines.every((line) => !line.trim()))
-    throw new Error("The CSV contains no candles.");
-  const result: CandlestickData<UTCTimestamp>[] = [];
-  for (const [index, line] of lines.entries()) {
-    const fields = line.split(",").map((x) => x.trim());
-    if (fields.length !== 5 || fields.some((x) => x === ""))
-      throw new Error(`Invalid row ${index + 2}.`);
-    const [rawTime, rawOpen, rawHigh, rawLow, rawClose] = fields;
-    const timestamp = /^\d+$/.test(rawTime ?? "")
-      ? Number(rawTime)
-      : Date.parse(rawTime ?? "") / 1000;
-    const [open, high, low, close] = [rawOpen, rawHigh, rawLow, rawClose].map(
-      Number,
+import type { ExposureResponse } from "./api-types";
+const candleFields = 5,
+  csvHeader = "time,open,high,low,close",
+  emptyCount = 0,
+  firstDataRow = 2,
+  isExposureResponse = (value: unknown): value is ExposureResponse => {
+    if (typeof value !== "object" || value === null) {
+      return false;
+    }
+    const data = value as Record<string, unknown>;
+    return (
+      typeof data.signed === "number" &&
+      Number.isFinite(data.signed) &&
+      typeof data.absolute === "number" &&
+      Number.isFinite(data.absolute) &&
+      Array.isArray(data.strikes) &&
+      data.strikes.every(
+        (strike: unknown) =>
+          typeof strike === "object" &&
+          strike !== null &&
+          ["strike", "call", "put"].every(
+            (key) =>
+              typeof (strike as Record<string, unknown>)[key] === "number" &&
+              Number.isFinite((strike as Record<string, number>)[key]),
+          ),
+      )
     );
+  },
+  lastIndexOffset = 1,
+  millisecondsPerSecond = 1000,
+  parseCandleRow = (() => {
+    const decodeTime = (raw: string): number => {
+        if (/^\d+$/u.test(raw)) {
+          return Number(raw);
+        }
+        return Date.parse(raw) / millisecondsPerSecond;
+      },
+      isValidCandle = (values: {
+        close: number;
+        high: number;
+        low: number;
+        open: number;
+        previous: number;
+        timestamp: number;
+      }): boolean => {
+        const { close, high, low, open, previous, timestamp } = values;
+        return (
+          Number.isSafeInteger(timestamp) &&
+          timestamp > emptyCount &&
+          timestamp > previous &&
+          [open, high, low, close].every(
+            (price) => Number.isFinite(price) && price > emptyCount,
+          ) &&
+          low <= Math.min(open, close) &&
+          high >= Math.max(open, close) &&
+          low <= high
+        );
+      },
+      parseRow = (
+        line: string,
+        index: number,
+        previous: number,
+      ): CandlestickData<UTCTimestamp> => {
+        const fields = line.split(",").map((field) => field.trim()),
+          [rawTime, rawOpen, rawHigh, rawLow, rawClose] = fields,
+          priceClose = Number(rawClose),
+          priceHigh = Number(rawHigh),
+          priceLow = Number(rawLow),
+          priceOpen = Number(rawOpen),
+          timestamp = decodeTime(rawTime ?? ""),
+          values = {
+            close: priceClose,
+            high: priceHigh,
+            low: priceLow,
+            open: priceOpen,
+            previous,
+            timestamp,
+          };
+        if (
+          fields.length !== candleFields ||
+          fields.some((field) => field === "")
+        ) {
+          throw new Error(`Invalid row ${String(index + firstDataRow)}.`);
+        }
+        if (!isValidCandle(values)) {
+          throw new Error(
+            `Invalid OHLC or chronological order on row ${String(index + firstDataRow)}.`,
+          );
+        }
+        return {
+          close: values.close,
+          high: values.high,
+          low: values.low,
+          open: values.open,
+          time: timestamp as UTCTimestamp,
+        };
+      };
+    return parseRow;
+  })(),
+  parseCandles = (text: string): CandlestickData<UTCTimestamp>[] => {
+    const lines = text.trim().split(/\r?\n/u);
     if (
-      !Number.isSafeInteger(timestamp) ||
-      timestamp <= 0 ||
-      open === undefined ||
-      high === undefined ||
-      low === undefined ||
-      close === undefined ||
-      ![open, high, low, close].every((x) => Number.isFinite(x) && x > 0) ||
-      low > Math.min(open, close) ||
-      high < Math.max(open, close) ||
-      low > high ||
-      (result.length > 0 && timestamp <= (result[result.length - 1]?.time ?? 0))
-    )
-      throw new Error(
-        `Invalid OHLC or chronological order on row ${index + 2}.`,
-      );
-    result.push({ time: timestamp as UTCTimestamp, open, high, low, close });
-  }
-  return result;
-}
-
-export function isExposureResponse(value: unknown): value is ExposureResponse {
-  if (typeof value !== "object" || value === null) return false;
-  const data = value as Record<string, unknown>;
-  return (
-    typeof data.signed === "number" &&
-    Number.isFinite(data.signed) &&
-    typeof data.absolute === "number" &&
-    Number.isFinite(data.absolute) &&
-    Array.isArray(data.strikes) &&
-    data.strikes.every(
-      (x: unknown) =>
-        typeof x === "object" &&
-        x !== null &&
-        ["strike", "call", "put"].every(
-          (key) =>
-            typeof (x as Record<string, unknown>)[key] === "number" &&
-            Number.isFinite((x as Record<string, number>)[key]),
-        ),
-    )
-  );
-}
+      lines
+        .shift()
+        ?.split(",")
+        .map((field) => field.trim().toLowerCase())
+        .join(",") !== csvHeader
+    ) {
+      throw new Error("CSV columns must be time,open,high,low,close.");
+    }
+    if (lines.length === emptyCount || lines.every((line) => !line.trim())) {
+      throw new Error("The CSV contains no candles.");
+    }
+    return lines.reduce<CandlestickData<UTCTimestamp>[]>(
+      (result, line, index) => {
+        result.push(
+          parseCandleRow(
+            line,
+            index,
+            result.at(-lastIndexOffset)?.time ?? emptyCount,
+          ),
+        );
+        return result;
+      },
+      [],
+    );
+  };
+export { isExposureResponse, parseCandles };

@@ -9,7 +9,6 @@ rust-version.workspace = true
 calculus = { path = "../calculus" }
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
-ts-rs = "11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 
 [dev-dependencies]

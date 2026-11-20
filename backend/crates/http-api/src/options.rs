@@ -4,45 +4,40 @@ use calculus::options::{
     IdentifiedContract, OptionContract, OptionKind, OptionSnapshot, Valuation, aggregate,
 };
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExposureRequest {
-    #[ts(type = "number")]
     observed_at: i64,
-    #[ts(type = "number")]
     available_at: i64,
-    #[ts(type = "number")]
     valued_at: i64,
     spot: f64,
     contracts: Vec<Contract>,
 }
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Contract {
     id: String,
     kind: Kind,
     strike: f64,
-    #[ts(type = "number")]
     expiry: i64,
     iv: f64,
     open_interest: f64,
     multiplier: f64,
 }
-#[derive(Deserialize, TS)]
+#[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Kind {
     Call,
     Put,
 }
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 pub(crate) struct ExposureResponse {
     signed: f64,
     absolute: f64,
     strikes: Vec<Strike>,
 }
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 struct Strike {
     strike: f64,
     call: f64,
@@ -109,18 +104,4 @@ pub(crate) async fn calculate(
             })
             .collect(),
     }))
-}
-
-/// Generate API type declarations from the Serde DTOs.
-pub fn typescript() -> String {
-    [
-        Kind::decl(),
-        Contract::decl(),
-        ExposureRequest::decl(),
-        Strike::decl(),
-        ExposureResponse::decl(),
-    ]
-    .into_iter()
-    .map(|declaration| format!("export {declaration}\n"))
-    .collect()
 }
