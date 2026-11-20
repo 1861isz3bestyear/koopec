@@ -1,4 +1,5 @@
-//! Initial read-only API surface; datasets and backtests are not yet available.
+pub mod options;
+// Initial API surface; datasets and backtests are not yet available.
 use axum::{Json, Router, http::StatusCode, routing::get};
 use serde::Serialize;
 
@@ -10,7 +11,7 @@ struct Health {
 #[derive(Serialize)]
 struct Capabilities {
     api_version: &'static str,
-    endpoints: [&'static str; 2],
+    endpoints: [&'static str; 3],
     backtests: bool,
     trading: bool,
 }
@@ -29,7 +30,7 @@ async fn health() -> Json<Health> {
 async fn capabilities() -> Json<Capabilities> {
     Json(Capabilities {
         api_version: "v1",
-        endpoints: ["health", "capabilities"],
+        endpoints: ["health", "capabilities", "options_exposure"],
         backtests: false,
         trading: false,
     })
@@ -48,5 +49,9 @@ pub fn router() -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/capabilities", get(capabilities))
+        .route(
+            "/v1/options/exposure",
+            axum::routing::post(options::calculate),
+        )
         .fallback(not_found)
 }
