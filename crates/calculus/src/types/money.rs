@@ -1,5 +1,6 @@
 use super::{
-    ArithmeticError, Currency, Price, Quantity, TypeParseError, Unit, parse::parse_decimal,
+    ArithmeticError, Currency, Price, Quantity, TypeParseError, Unit,
+    parse::parse_decimal_with_scale,
 };
 use rust_decimal::Decimal;
 use std::{
@@ -12,9 +13,11 @@ pub struct Money {
     currency: Currency,
 }
 impl Money {
+    /// Parses a nonnegative decimal exactly, with up to 28 fractional digits.
+    /// Values outside Decimal's representable range are rejected, never rounded.
     pub fn parse(text: &str, currency: Currency) -> Result<Self, TypeParseError> {
         Ok(Self {
-            amount: parse_decimal(text, true)?,
+            amount: parse_decimal_with_scale(text, true, Decimal::MAX_SCALE)?,
             currency,
         })
     }

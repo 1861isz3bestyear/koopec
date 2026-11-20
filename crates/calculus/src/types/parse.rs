@@ -2,6 +2,14 @@ use super::TypeParseError;
 use rust_decimal::Decimal;
 pub const MAX_SCALE: u32 = 8;
 pub fn parse_decimal(text: &str, allow_zero: bool) -> Result<Decimal, TypeParseError> {
+    parse_decimal_with_scale(text, allow_zero, MAX_SCALE)
+}
+
+pub fn parse_decimal_with_scale(
+    text: &str,
+    allow_zero: bool,
+    max_scale: u32,
+) -> Result<Decimal, TypeParseError> {
     let value = Decimal::from_str_exact(text).map_err(|_| TypeParseError::InvalidDecimal)?;
     if text.starts_with('-') || value.is_sign_negative() {
         return Err(TypeParseError::Negative);
@@ -9,7 +17,7 @@ pub fn parse_decimal(text: &str, allow_zero: bool) -> Result<Decimal, TypeParseE
     if !allow_zero && value.is_zero() {
         return Err(TypeParseError::NonPositive);
     }
-    if value.scale() > MAX_SCALE {
+    if value.scale() > max_scale {
         return Err(TypeParseError::TooPrecise);
     }
     Ok(value)

@@ -10,14 +10,11 @@ use calculus::types::{
 fn decimal_input_partitions_preserve_financial_boundaries() {
     let ticker = Ticker::new(Asset::BTC, Currency::USDT);
     let unit = Unit::Asset(Asset::BTC);
-    // Eight decimal places are accepted; a ninth is rejected for all inputs.
+    // Money supports finer precision; price and quantity reject a ninth decimal place.
     assert!(Money::parse("0.00000001", Currency::USDT).is_ok());
     assert!(Price::parse("0.00000001", ticker).is_ok());
     assert!(Quantity::parse("0.00000001", unit).is_ok());
-    assert_eq!(
-        Money::parse("0.000000001", Currency::USDT),
-        Err(TypeParseError::TooPrecise)
-    );
+    assert!(Money::parse("0.000000001", Currency::USDT).is_ok());
     assert_eq!(
         Price::parse("0.000000001", ticker),
         Err(TypeParseError::TooPrecise)
