@@ -1,0 +1,11 @@
+[package]
+name = "calculus"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rust_decimal = { version = "1.43.0", features = ["macros", "maths", "serde-arbitrary-precision"] }
+
+[lints]
+workspace = true
