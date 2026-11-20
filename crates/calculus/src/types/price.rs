@@ -13,6 +13,16 @@ impl Price {
             instrument,
         })
     }
+    /// Construct a positive price from a calculated decimal with at most eight fractional places.
+    pub fn from_decimal(value: Decimal, instrument: Ticker) -> Result<Self, TypeParseError> {
+        if value <= Decimal::ZERO {
+            return Err(TypeParseError::NonPositive);
+        }
+        if value.scale() > 8 {
+            return Err(TypeParseError::TooPrecise);
+        }
+        Ok(Self { value, instrument })
+    }
     #[must_use]
     pub const fn value(self) -> Decimal {
         self.value
