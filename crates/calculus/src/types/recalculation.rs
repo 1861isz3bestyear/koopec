@@ -74,3 +74,51 @@ impl Projection {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{JournalRow, Projection, ProjectionError, RowId, RowPayload};
+    use crate::types::{CommitSeq, Micros};
+
+    fn row(id: u64, sequence: u64, payload: RowPayload) -> JournalRow {
+        JournalRow {
+            id: RowId(id),
+            commit_seq: CommitSeq(sequence),
+            available_at: Micros(0),
+            payload,
+        }
+    }
+
+    #[test]
+    fn projection_rejects_invalid_transitions_without_changing_state() {
+        let mut projection = Projection::default();
+        projection
+            .apply(&row(1, 1, RowPayload::Observation { value: 10 }))
+            .unwrap();
+        let before = projection.clone();
+        for (invalid, expected) in [
+            (
+                row(1, 1, RowPayload::Observation { value: 20 }),
+                ProjectionError::OutOfOrder,
+            ),
+            (
+                row(1, 2, RowPayload::Observation { value: 20 }),
+                ProjectionError::DuplicateObservation,
+            ),
+            (
+                row(
+                    2,
+                    2,
+                    RowPayload::Recalculation {
+                        corrects: RowId(99),
+                        value: 20,
+                    },
+                ),
+                ProjectionError::MissingObservation,
+            ),
+        ] {
+            assert_eq!(projection.apply(&invalid), Err(expected));
+            assert_eq!(projection, before);
+        }
+    }
+}

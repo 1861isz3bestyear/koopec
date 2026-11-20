@@ -14,3 +14,22 @@ pub fn parse_decimal(text: &str, allow_zero: bool) -> Result<Decimal, TypeParseE
     }
     Ok(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{TypeParseError, parse_decimal};
+
+    #[test]
+    fn decimal_validation_distinguishes_zero_sign_and_precision() {
+        for (input, allow_zero, expected) in [
+            ("0", true, None),
+            ("0", false, Some(TypeParseError::NonPositive)),
+            ("-0", true, Some(TypeParseError::Negative)),
+            ("0.00000001", false, None),
+            ("0.000000001", false, Some(TypeParseError::TooPrecise)),
+            ("invalid", true, Some(TypeParseError::InvalidDecimal)),
+        ] {
+            assert_eq!(parse_decimal(input, allow_zero).err(), expected, "{input}");
+        }
+    }
+}
