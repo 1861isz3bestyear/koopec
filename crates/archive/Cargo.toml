@@ -1,0 +1,11 @@
+[package]
+name = "archive"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+[lints]
+workspace = true
