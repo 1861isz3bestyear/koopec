@@ -18,9 +18,7 @@ from snapshot_tunnel.gamma_search import search_flips
 from snapshot_tunnel.options_model import (
     CandleClose,
     Snapshot,
-    max_pain,
     parse_snapshots,
-    ranked_walls,
     update_gex_once_per_candle,
 )
 
@@ -40,7 +38,7 @@ from gui_calculator.options_profile_chart import (
 from gui_calculator.previous_day_view import (
     render_previous_day_comparison,
 )
-from gui_calculator.rust_backend import strike_exposures
+from gui_calculator.rust_backend import max_pain, ranked_walls, strike_exposures
 from gui_calculator.snapshot_balance_view import (
     snapshot_balance,
     snapshot_balance_chart,

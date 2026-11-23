@@ -50,6 +50,7 @@ impl From<rusqlite::Error> for ArchiveError {
 #[derive(Serialize)]
 pub struct Collection {
     pub id: String,
+    pub first_available_at: String,
     pub available_at: String,
 }
 #[derive(Serialize)]
@@ -87,19 +88,22 @@ fn collections(db: &Connection, tables: &[&str]) -> Result<Vec<Collection>, Arch
         _ => "SELECT collection_id AS collection, available_at,source FROM tunnel_observations WHERE asset='BTC' AND error='' AND source IN ('instruments','options','spot')",
     }).collect();
     let query = format!(
-        "SELECT collection, MAX(available_at) FROM ({}) GROUP BY collection HAVING COUNT(DISTINCT source)=3 ORDER BY MAX(available_at),collection",
+        "SELECT collection, MIN(available_at), MAX(available_at) FROM ({}) GROUP BY collection HAVING COUNT(DISTINCT source)=3 ORDER BY MAX(available_at),collection",
         queries.join(" UNION ALL ")
     );
     let mut statement = db.prepare(&query)?;
     let mapped = statement.query_map([], |row| {
         Ok(Collection {
             id: row.get(0)?,
-            available_at: row.get(1)?,
+            first_available_at: row.get(1)?,
+            available_at: row.get(2)?,
         })
     })?;
     let mut result = Vec::new();
     for row in mapped {
         let item = row?;
+        DateTime::parse_from_rfc3339(&item.first_available_at)
+            .map_err(|_| ArchiveError::Invalid)?;
         DateTime::parse_from_rfc3339(&item.available_at).map_err(|_| ArchiveError::Invalid)?;
         result.push(item);
     }
@@ -251,6 +255,13 @@ fn parse_contracts(
     }
     Ok(contracts)
 }
+/// Read complete BTC collection bounds without opening their payloads.
+pub fn index(path: &Path) -> Result<Vec<Collection>, ArchiveError> {
+    let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    db.execute_batch("BEGIN DEFERRED")?;
+    collections(&db, &tables(&db)?)
+}
+
 /// Read the collection index and one complete selected chain. Input is never modified.
 pub fn load(path: &Path, selection: Option<&str>) -> Result<LoadedArchive, ArchiveError> {
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -318,6 +329,32 @@ mod tests {
             .collect();
         (encoder.finish().unwrap(), digest)
     }
+    #[test]
+    fn index_reports_complete_receipt_bounds_without_reading_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite");
+        create_archive(&path);
+        let db = Connection::open(&path).unwrap();
+        db.execute("UPDATE tunnel_inputs SET payload='invalid'", [])
+            .unwrap();
+        db.execute("UPDATE tunnel_inputs SET available_at='2026-11-09T12:00:00+00:00' WHERE collection_id='older' AND source='spot'", []).unwrap();
+        let collections = index(&path).unwrap();
+        assert_eq!(collections.len(), 2);
+        assert_eq!(collections[0].id, "older");
+        assert_eq!(
+            collections[0].first_available_at,
+            "2026-11-09T12:00:00+00:00"
+        );
+        assert_eq!(collections[0].available_at, "2026-11-09T12:00:02+00:00");
+        assert!(load(&path, Some("older")).is_err());
+        db.execute(
+            "UPDATE tunnel_inputs SET available_at='invalid' WHERE collection_id='older'",
+            [],
+        )
+        .unwrap();
+        assert!(index(&path).is_err());
+    }
+
     #[test]
     fn compressed_payload_integrity_and_codec_are_checked() {
         let (data, digest) = zipped(br#"{"price":100}"#);

@@ -11,13 +11,11 @@ from plotly.subplots import make_subplots
 from shared.option_levels import DEFAULT_LEVEL_RANGE, OptionLevelRange
 from snapshot_tunnel.options_model import (
     Snapshot,
-    max_pain,
     net_exposure,
-    ranked_walls,
 )
 
 from gui_calculator.charts import add_hover_crosshair
-from gui_calculator.rust_backend import strike_exposures
+from gui_calculator.rust_backend import max_pain, ranked_walls, strike_exposures
 
 if TYPE_CHECKING:
     from snapshot_tunnel.gamma_search import FlipResult

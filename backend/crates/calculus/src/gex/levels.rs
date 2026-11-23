@@ -76,6 +76,15 @@ pub fn ranked_walls(
     spot: f64,
     range: Option<f64>,
 ) -> Result<RankedWalls, OptionsError> {
+    rank_strikes(&summary.strikes, spot, range)
+}
+
+/// Rank already aggregated strike exposures using the same bounds and ordering.
+pub fn rank_strikes(
+    strikes: &[StrikeExposure],
+    spot: f64,
+    range: Option<f64>,
+) -> Result<RankedWalls, OptionsError> {
     if !spot.is_finite()
         || spot <= 0.0
         || range.is_some_and(|r| !r.is_finite() || r <= 0.0 || r >= 1.0)
@@ -85,15 +94,13 @@ pub fn ranked_walls(
     let eligible = |x: &&StrikeExposure| {
         range.is_none_or(|r| x.strike >= spot * (1.0 - r) && x.strike <= spot * (1.0 + r))
     };
-    let mut calls: Vec<_> = summary
-        .strikes
+    let mut calls: Vec<_> = strikes
         .iter()
         .filter(eligible)
         .filter(|x| x.call > 0.0)
         .copied()
         .collect();
-    let mut puts: Vec<_> = summary
-        .strikes
+    let mut puts: Vec<_> = strikes
         .iter()
         .filter(eligible)
         .filter(|x| x.put < 0.0)

@@ -11,9 +11,9 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-from snapshot_tunnel.bitget import growth_momentum
 from snapshot_tunnel.options_model import Snapshot
 
+from gui_calculator.bitget_margin import growth_momentum
 from gui_calculator.bitget_margin import (
     load_bitget_growth as load_bitget_growth,
 )

@@ -7,6 +7,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
@@ -19,7 +20,7 @@ from gui_calculator.data_sources import parse_uploaded_csv
 
 MINUTES_PER_DAY = 1440
 pytestmark = pytest.mark.contract
-AGGREGATOR = Path(__file__).resolve().parents[2] / "options_aggregator"
+AGGREGATOR = os.environ.get("KOOPEC_AGGREGATOR_ROOT")
 RAW = (
     "date,currency,instrument,expiry,strike,type,open_interest,mark_iv,"
     "underlying_usd\n"
@@ -58,9 +59,9 @@ def _write_archive(root: Path) -> None:
             ])
 
 
-async def _prepare(root: Path) -> None:
+async def _prepare(root: Path, aggregator: Path) -> None:
     """Execute the producer CLI in its own Python environment."""
-    interpreter = AGGREGATOR / ".venv" / "bin" / "python"
+    interpreter = aggregator / ".venv" / "bin" / "python"
     assert interpreter.exists(), "Run uv sync --locked in options_aggregator"
     process = await asyncio.create_subprocess_exec(
         str(interpreter),
@@ -70,7 +71,7 @@ async def _prepare(root: Path) -> None:
         str(root),
         "prepare-bykaranteli",
         "--accept-research-assumptions",
-        cwd=AGGREGATOR,
+        cwd=aggregator,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -86,10 +87,10 @@ def exported(tmp_path: Path) -> Path:
         The generated bundle directory.
 
     """
-    if not AGGREGATOR.is_dir():
-        pytest.skip("Sibling options_aggregator required for contract tests")
+    if AGGREGATOR is None:
+        pytest.skip("Set KOOPEC_AGGREGATOR_ROOT for aggregator contract tests")
     _write_archive(tmp_path)
-    asyncio.run(_prepare(tmp_path))
+    asyncio.run(_prepare(tmp_path, Path(AGGREGATOR)))
     return tmp_path / "gui" / "bykaranteli_research"
 
 

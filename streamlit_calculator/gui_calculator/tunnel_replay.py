@@ -17,12 +17,13 @@ from shared.tunnel import (
     long_target_ceiling,
     regime_state,
 )
-from snapshot_tunnel.options_model import ranked_walls, strike_exposures
+from snapshot_tunnel.options_model import strike_exposures
 from snapshot_tunnel.tunnel_plans import selected_snapshots, tunnel_plans
 
 from gui_calculator.ranked_levels import ranked_price_columns
 
 _MINUTE = timedelta(minutes=1)
+from gui_calculator.rust_backend import ranked_walls
 
 if TYPE_CHECKING:
     from shared.candles import Candle

@@ -9,5 +9,8 @@ case "$(uname -s)" in
     Darwin) library="$root/target/release/libkoopec_calculus.dylib" ;;
     *) library="$root/target/release/libkoopec_calculus.so" ;;
 esac
-cp "$library" "$root/target/python/koopec_calculus.so"
-PYTHONPATH="$root/target/python${PYTHONPATH:+:$PYTHONPATH}" "$python_path" -m pytest "$root/tests/test_native.py" -q
+extension=$(mktemp "$root/target/python/.koopec_calculus.XXXXXX")
+trap 'test ! -f "$extension" || unlink "$extension"' EXIT
+cp "$library" "$extension"
+mv -f "$extension" "$root/target/python/koopec_calculus.so"
+PYTHONPATH="$root/target/python${PYTHONPATH:+:$PYTHONPATH}" "$python_path" -m pytest "$root/tests/test_native.py" -o addopts= -q

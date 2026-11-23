@@ -3,19 +3,18 @@
 
 import asyncio
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from paper_trading_bot.config import SERVER_CONFIG_DIRECTORY, PaperBotConfig
 from shared.hedge_strategy import HEDGE_MODE
+from shared.paper_config import SERVER_CONFIG_DIRECTORY, PaperBotConfig
 from shared.validation import json_object, object_list
 
 pytestmark = pytest.mark.contract
-SERVER_ROOT = (
-    Path(__file__).resolve().parents[3] / "paper" / "server_bot" / "server_bot"
-)
+SERVER_ROOT = os.environ.get("KOOPEC_SERVER_ROOT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +72,9 @@ def test_export_is_accepted_by_server_and_signal_engine_matches(
     # A standalone checkout can run the other test levels without the server
     # tree.
     """Verify export is accepted by server and signal engine matches."""
-    if not SERVER_ROOT.is_dir():
+    if SERVER_ROOT is None:
         pytest.skip(
-            "server sibling project is required for cross-project contract"
-            " tests"
+            "KOOPEC_SERVER_ROOT is required for cross-project contract tests"
         )
     config = PaperBotConfig(
         strategy_mode="VWAP band mean reversion",
@@ -128,11 +126,11 @@ print(json.dumps({'equity':eq["equity"].astype(float).tolist(),
     server = run_python(
         code,
         str(path),
-        cwd=SERVER_ROOT,
+        cwd=Path(SERVER_ROOT),
     )
     assert server.returncode == 0, server.stderr
     local_code = code.replace(
-        "from reference_bot.config", "from paper_trading_bot.config"
+        "from reference_bot.config", "from shared.paper_config"
     ).replace(
         "cfg=PaperBotConfig.load(Path(sys.argv[1]))",
         "cfg=PaperBotConfig(**{k:v for k,v in"
@@ -162,8 +160,8 @@ def test_zero_hedge_export_preserves_risk_settings(
 
     legs.
     """
-    if not SERVER_ROOT.is_dir():
-        pytest.skip("server sibling required")
+    if SERVER_ROOT is None:
+        pytest.skip("Set KOOPEC_SERVER_ROOT for the server contract tests")
     cfg = PaperBotConfig(
         strategy_mode=HEDGE_MODE,
         timeframe="1m",
@@ -190,7 +188,7 @@ def test_zero_hedge_export_preserves_risk_settings(
     result = run_python(
         code,
         str(path),
-        cwd=SERVER_ROOT,
+        cwd=Path(SERVER_ROOT),
     )
     assert result.returncode == 0, result.stderr
     loaded = json_object(result.stdout)
@@ -228,10 +226,9 @@ def test_leverage_export_preserves_settings_in_both_server_bots(
     tmp_path: Path, leverage: int
 ) -> None:
     """Verify leverage export preserves settings in both server bots."""
-    if not SERVER_ROOT.is_dir():
+    if SERVER_ROOT is None:
         pytest.skip(
-            "server sibling project is required for cross-project contract"
-            " tests"
+            "KOOPEC_SERVER_ROOT is required for cross-project contract tests"
         )
     cfg = PaperBotConfig(
         strategy_mode="VWAP band mean reversion",
@@ -264,7 +261,7 @@ print('ok')
         code,
         str(path),
         str(leverage),
-        cwd=SERVER_ROOT,
+        cwd=Path(SERVER_ROOT),
     )
     assert result.returncode == 0, result.stderr
     with pytest.raises(ValueError, match="Lima server export"):
@@ -273,4 +270,9 @@ print('ok')
 
 def test_named_exports_target_server_config_directory() -> None:
     """Keep calculator exports available to the deployable server."""
-    assert SERVER_CONFIG_DIRECTORY == SERVER_ROOT / "configs"
+    root = (
+        Path(SERVER_ROOT)
+        if SERVER_ROOT is not None
+        else Path(__file__).resolve().parents[2]
+    )
+    assert root / "configs" == SERVER_CONFIG_DIRECTORY

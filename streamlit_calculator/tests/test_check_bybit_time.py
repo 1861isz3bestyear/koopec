@@ -1,7 +1,7 @@
 # Copyright 2026 anchored-vwam-backtest contributors
 """Tests for the public Bybit clock diagnostic."""
 
-from types import SimpleNamespace
+import json
 from unittest.mock import patch
 
 import pytest
@@ -11,20 +11,11 @@ from check_bybit_time import compare_clock
 class TimeResponse:
     """A successful response with a controlled JSON payload."""
 
-    payload: object
+    text: str
 
     def __init__(self, payload: object) -> None:
         """Store the controlled payload."""
-        self.payload = payload
-
-    def json(self) -> object:
-        """Return the test payload.
-
-        Returns:
-            The controlled response payload.
-
-        """
-        return self.payload
+        self.text = json.dumps(payload)
 
     def raise_for_status(self) -> None:
         """Represent a successful HTTP status."""
@@ -33,12 +24,9 @@ class TimeResponse:
 def test_clock_offset_uses_request_midpoint() -> None:
     """Estimate offset from the midpoint rather than either endpoint."""
     response = TimeResponse({"time": 100_000})
-    values = iter([101.0, 103.0])
     with (
         patch("check_bybit_time.requests.get", return_value=response),
-        patch(
-            "check_bybit_time.time", SimpleNamespace(time=lambda: next(values))
-        ),
+        patch("check_bybit_time._wall_time", side_effect=[101.0, 103.0]),
     ):
         result = compare_clock()
     assert result.offset == pytest.approx(2.0)

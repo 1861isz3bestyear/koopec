@@ -4,15 +4,15 @@
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime, timedelta
 from itertools import pairwise, starmap
 from typing import TYPE_CHECKING, cast
 
 import koopec_calculus
-from snapshot_tunnel.options_model import Exposure
+from shared.option_levels import DEFAULT_LEVEL_RANGE, OptionLevelRange
+from snapshot_tunnel.options_model import Exposure, RankedWalls
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from snapshot_tunnel.options_model import Option, Snapshot
 
 
@@ -184,3 +184,55 @@ def strike_exposures(snapshot: Snapshot) -> tuple[Exposure, ...]:
             for strike, call, put in strikes
         ],
     })
+
+
+def max_pain(snapshot: Snapshot) -> float | None:
+    """Calculate max pain in Rust using exact expiry identities.
+
+    Returns:
+        The lowest minimizing strike for a single expiry with open interest.
+
+    Raises:
+        ValueError: If an expiry timestamp has no timezone.
+
+    """
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    microsecond = timedelta(microseconds=1)
+    contracts: list[tuple[str, str, float, int, float, float, float]] = []
+    for index, option in enumerate(snapshot.options):
+        if option.expiry.utcoffset() is None:
+            msg = "Option expiries must include a timezone."
+            raise ValueError(msg)
+        contracts.append((
+            f"{option.exchange}:{index}",
+            option.side,
+            option.strike,
+            (option.expiry - epoch) // microsecond,
+            option.iv,
+            option.open_interest,
+            option.multiplier,
+        ))
+    return koopec_calculus.options_max_pain(contracts)
+
+
+def ranked_walls(
+    levels: tuple[Exposure, ...],
+    *,
+    spot: float,
+    level_range: OptionLevelRange = DEFAULT_LEVEL_RANGE,
+) -> RankedWalls:
+    """Rank already calculated exposures through the Rust calculus crate.
+
+    Returns:
+        Up to two calls and two puts within the configured price range.
+
+    """
+    calls, puts = koopec_calculus.ranked_walls(
+        [(level.strike, level.call, level.put) for level in levels],
+        spot,
+        level_range.distance if level_range.enabled else None,
+    )
+    return RankedWalls(
+        calls=tuple(Exposure(strike=s, call=c, put=p) for s, c, p in calls),
+        puts=tuple(Exposure(strike=s, call=c, put=p) for s, c, p in puts),
+    )

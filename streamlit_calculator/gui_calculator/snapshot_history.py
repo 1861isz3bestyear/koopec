@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import streamlit as st
 from snapshot_tunnel.gamma_search import search_flips
-from snapshot_tunnel.options_model import ranked_walls, strike_exposures
+
+from gui_calculator.rust_backend import ranked_walls, strike_exposures
 
 if TYPE_CHECKING:
     from snapshot_tunnel.options_model import Snapshot

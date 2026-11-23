@@ -11,3 +11,7 @@ frontend/playwright-report/
 
 /.test-venv/
 /streamlit_calculator/test-results/
+
+/.venv/
+/gex_downloads/
+__pycache__/

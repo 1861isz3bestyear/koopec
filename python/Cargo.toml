@@ -8,7 +8,9 @@ name = "koopec_calculus"
 crate-type = ["cdylib"]
 
 [dependencies]
+archive = { path = "../backend/crates/archive" }
 calculus = { path = "../backend/crates/calculus" }
+market-data = { path = "../backend/crates/market-data" }
 pyo3 = { version = "0.27.1", features = ["extension-module"] }
 
 [workspace]

@@ -2,20 +2,17 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-backtest="$root/../backtest"
-
-if [ ! -f "$backtest/pyproject.toml" ]; then
-    printf '%s\n' "The sibling backtest project was not found at $backtest." >&2
-    exit 1
-fi
-
-python_path=$(uv run --project "$backtest" python -c "import sys; print(sys.executable)")
-PYO3_PYTHON="$python_path" cargo build --manifest-path "$root/python/Cargo.toml" --release
+python_path=$(uv run --locked --project "$root" python -c "import sys; print(sys.executable)")
+PYO3_PYTHON="$python_path" cargo build --locked --manifest-path "$root/python/Cargo.toml" --release
 mkdir -p "$root/python/target/python"
 case "$(uname -s)" in
     Darwin) library="$root/python/target/release/libkoopec_calculus.dylib" ;;
     *) library="$root/python/target/release/libkoopec_calculus.so" ;;
 esac
-cp "$library" "$root/python/target/python/koopec_calculus.so"
-PYTHONPATH="$root/python/target/python:$root/streamlit_calculator:$backtest${PYTHONPATH:+:$PYTHONPATH}" \
-    uv run --project "$backtest" streamlit run "$root/streamlit_calculator/gui_calculator/main.py" "$@"
+extension=$(mktemp "$root/python/target/python/.koopec_calculus.XXXXXX")
+trap 'test ! -f "$extension" || unlink "$extension"' EXIT
+cp "$library" "$extension"
+mv -f "$extension" "$root/python/target/python/koopec_calculus.so"
+cd "$root"
+PYTHONPATH="$root/python/target/python:$root/streamlit_calculator:$root/streamlit_calculator/vendor" \
+    exec "$python_path" -m streamlit run "$root/streamlit_calculator/gui_calculator/main.py" "$@"

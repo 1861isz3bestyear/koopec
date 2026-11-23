@@ -9,7 +9,6 @@ import pandas as pd
 import pytest
 from market_storage.archive import Archive
 from snapshot_tunnel.local_archive import (
-    inspect_archive,
     load_archive_snapshot_at,
     load_archive_snapshots,
 )
@@ -19,6 +18,7 @@ from snapshot_tunnel.options_model import (
     parse_snapshots,
 )
 
+from gui_calculator.local_archive import inspect_archive
 from gui_calculator.local_archive_view import archive_gex_history
 from gui_calculator.observed_history import (
     observation_history,

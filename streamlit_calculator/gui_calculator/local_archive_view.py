@@ -15,13 +15,13 @@ from snapshot_tunnel.archive_export import (
     archived_snapshot,
 )
 from snapshot_tunnel.local_archive import (
-    inspect_archive,
     load_archive_oscillators,
     load_archive_snapshot_at,
     load_archive_snapshots,
     require_archive_version,
 )
 
+from gui_calculator.local_archive import inspect_archive
 from gui_calculator.observed_history import observation_history
 
 if TYPE_CHECKING:
@@ -37,14 +37,14 @@ def default_archive_path() -> Path:
     """Locate the consolidated download, independently of shell directory.
 
     Returns:
-        Configured archive path or the workspace's gex_downloads snapshot.
+        Configured archive path or Koopec's gex_downloads snapshot.
 
     """
     return Path(
         os.environ.get(
             "GUI_CALCULATOR_ARCHIVE",
             str(
-                Path(__file__).resolve().parents[3]
+                Path(__file__).resolve().parents[2]
                 / "gex_downloads/tunnel_inputs.sqlite"
             ),
         )
