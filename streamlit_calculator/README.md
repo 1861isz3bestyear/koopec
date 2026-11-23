@@ -5,21 +5,19 @@ uses that project's Python environment and shared modules, so keep `backtest`
 next to `koopec` and install its locked dependencies with `uv sync --locked`
 in `backtest`.
 
-From the `koopec` directory, start both the Rust API and the calculator with:
+From the `koopec` directory, start the calculator with:
 
 ```sh
 ./calculator
 ```
 
-Stop both with Ctrl+C. Additional arguments are passed to Streamlit, for
-example `./calculator --server.port 8502`. Port 8000 must be available for the
-Rust API. The launcher requires `cargo`, `uv`, and `curl`.
+Stop it with Ctrl+C. Additional arguments are passed to Streamlit, for
+example `./calculator --server.port 8502`. The launcher requires `cargo` and `uv`.
 
 The default local archive is `../gex_downloads/tunnel_inputs.sqlite` relative
-to the workspace containing `koopec`. The launcher connects to the API at
-`http://127.0.0.1:8000`.
+to the workspace containing `koopec`.
 
-Selected options-profile strike exposures are calculated in-process by a PyO3 extension using the Rust calculus crate. The launcher builds the extension in release mode; the Rust API remains in use for local archive access. The extension currently uses whole-second timestamps and is not yet the backtest engine. The
+Selected options-profile strike exposures are calculated in-process by a PyO3 extension using the Rust calculus crate. The launcher builds the extension in release mode. The extension currently uses whole-second timestamps and is not yet the backtest engine. The
 archive reader, strategy replay, backtests, and other calculations still use
 Python code from the reference project. This is not yet a complete migration to
 the Rust backend; it requires the sibling Python project to run.

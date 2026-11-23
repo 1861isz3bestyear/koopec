@@ -85,3 +85,6 @@ impl Archive {
         }).optional()?)
     }
 }
+
+/// Reader for existing local GEX option archives.
+pub mod local_archive;

@@ -1,9 +1,33 @@
 //! Read complete option collections from a local Python market-storage archive.
-use crate::options::{Contract, ExposureRequest, Kind};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ExposureRequest {
+    pub observed_at: i64,
+    pub available_at: i64,
+    pub valued_at: i64,
+    pub spot: f64,
+    pub contracts: Vec<Contract>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Contract {
+    pub id: String,
+    pub kind: Kind,
+    pub strike: f64,
+    pub expiry: i64,
+    pub iv: f64,
+    pub open_interest: f64,
+    pub multiplier: f64,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Call,
+    Put,
+}
 use chrono::{DateTime, Utc};
 use flate2::read::ZlibDecoder;
 use rusqlite::{Connection, OpenFlags, params};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -13,7 +37,7 @@ use std::{
 };
 
 #[derive(Debug)]
-pub(crate) enum ArchiveError {
+pub enum ArchiveError {
     Database,
     Invalid,
 }
@@ -24,20 +48,20 @@ impl From<rusqlite::Error> for ArchiveError {
 }
 
 #[derive(Serialize)]
-pub(crate) struct Collection {
-    id: String,
-    available_at: String,
+pub struct Collection {
+    pub id: String,
+    pub available_at: String,
 }
 #[derive(Serialize)]
-pub(crate) struct LoadedArchive {
-    collections: Vec<Collection>,
-    selected: String,
-    snapshot: ExposureRequest,
+pub struct LoadedArchive {
+    pub collections: Vec<Collection>,
+    pub selected: String,
+    pub snapshot: ExposureRequest,
 }
 #[derive(Deserialize)]
-pub(crate) struct Selection {
-    pub(crate) collection: Option<String>,
-    pub(crate) path: Option<String>,
+pub struct Selection {
+    pub collection: Option<String>,
+    pub path: Option<String>,
 }
 
 fn tables(db: &Connection) -> Result<Vec<&'static str>, ArchiveError> {
@@ -228,7 +252,7 @@ fn parse_contracts(
     Ok(contracts)
 }
 /// Read the collection index and one complete selected chain. Input is never modified.
-pub(crate) fn load(path: &Path, selection: Option<&str>) -> Result<LoadedArchive, ArchiveError> {
+pub fn load(path: &Path, selection: Option<&str>) -> Result<LoadedArchive, ArchiveError> {
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     db.execute_batch("BEGIN DEFERRED")?;
     let tables = tables(&db)?;
