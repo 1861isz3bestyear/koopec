@@ -1,5 +1,6 @@
 //! Exchange-specific public market-data requests and validated responses.
 //! Transport and receipt timestamps are supplied by the caller.
+pub mod bybit;
 pub mod deribit;
 
 use calculus::indicators::{BookLevel, GrowthObservation};

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -183,3 +184,20 @@ def database_rows(value: object) -> list[tuple[object, ...]]:
             raise TypeError(msg)
         rows.append(cast("tuple[object, ...]", row))
     return rows
+
+
+def unix_microseconds(value: datetime) -> int:
+    """Convert an aware timestamp to exact Unix microseconds.
+
+    Returns:
+        Signed time relative to the Unix epoch.
+
+    Raises:
+        ValueError: If the timestamp has no UTC offset.
+
+    """
+    if value.utcoffset() is None:
+        msg = "Market timestamps must have a UTC offset."
+        raise ValueError(msg)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    return (value - epoch) // timedelta(microseconds=1)

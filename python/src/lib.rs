@@ -421,8 +421,79 @@ fn load_candles(
         .collect())
 }
 
+#[pyfunction]
+fn bybit_interest_page(payload: &str) -> PyResult<(Vec<(i64, f64)>, String)> {
+    let page = market_data::bybit::interest_page(payload).map_err(PyValueError::new_err)?;
+    Ok((page.samples, page.cursor))
+}
+
+#[pyfunction]
+fn oi_momentum(
+    interval_seconds: i64,
+    samples: Vec<(i64, i64, f64, f64)>,
+) -> PyResult<Vec<Option<f64>>> {
+    use calculus::indicators::{IndicatorError, InterestObservation, Interval, OiMomentum};
+    let interval = match interval_seconds {
+        300 => Interval::FiveMinutes,
+        3_600 => Interval::Hourly,
+        _ => return Err(PyValueError::new_err("Invalid open-interest interval")),
+    };
+    let mut indicator = OiMomentum::with_microseconds(interval);
+    samples
+        .into_iter()
+        .map(|(observed, received, oi, price)| {
+            let point =
+                InterestObservation::new(observed, received, oi, price).map_err(invalid_margin)?;
+            match indicator.update(point) {
+                Ok(IndicatorState::Ready { value, .. }) => Ok(Some(value)),
+                Ok(IndicatorState::WarmingUp { .. } | IndicatorState::Gap { .. }) => Ok(None),
+                Err(IndicatorError::OutOfOrder) => Err(PyValueError::new_err(
+                    "Market observations must be strictly chronological",
+                )),
+                Err(IndicatorError::Arithmetic) => {
+                    Err(PyValueError::new_err("OI percentage change overflow"))
+                }
+                Err(error) => Err(invalid_margin(error)),
+            }
+        })
+        .collect()
+}
+
+#[pyfunction]
+fn daily_receipts(receipts: Vec<(usize, i64)>) -> Vec<usize> {
+    calculus::options::select_daily_receipts(receipts.into_iter())
+}
+
+#[pyfunction]
+fn replay_plan_indices(windows: Vec<(i64, i64)>, quotes: Vec<i64>) -> PyResult<Vec<Option<usize>>> {
+    let plans: Vec<_> = windows
+        .into_iter()
+        .map(|(available, expires)| calculus::plans::PlanWindow { available, expires })
+        .collect();
+    calculus::plans::active_plan_indices(&plans, &quotes)
+        .map_err(|_| PyValueError::new_err("Replay plans must have ordered, valid receipt windows"))
+}
+
+#[pyfunction]
+fn validate_archive(py: Python<'_>, path: PathBuf) -> PyResult<()> {
+    py.detach(|| archive::storage::backup::validate(&path))
+        .map_err(|error| storage_error(py, error))
+}
+
+#[pyfunction]
+fn backup_archive(py: Python<'_>, source: PathBuf, destination: PathBuf) -> PyResult<()> {
+    py.detach(|| archive::storage::backup::snapshot(&source, &destination))
+        .map_err(|error| storage_error(py, error))
+}
+
 #[pymodule]
 fn koopec_calculus(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(bybit_interest_page, module)?)?;
+    module.add_function(wrap_pyfunction!(oi_momentum, module)?)?;
+    module.add_function(wrap_pyfunction!(daily_receipts, module)?)?;
+    module.add_function(wrap_pyfunction!(replay_plan_indices, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_archive, module)?)?;
+    module.add_function(wrap_pyfunction!(backup_archive, module)?)?;
     module.add_function(wrap_pyfunction!(strike_exposures, module)?)?;
     module.add_function(wrap_pyfunction!(options_max_pain, module)?)?;
     module.add_function(wrap_pyfunction!(ranked_walls, module)?)?;

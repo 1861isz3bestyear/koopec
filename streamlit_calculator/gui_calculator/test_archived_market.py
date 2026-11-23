@@ -254,7 +254,11 @@ def test_downloaded_vps_snapshot_drives_real_gex_calculation(
     project = Path(__file__).resolve().parents[2]
     (root / "storage").symlink_to(project, target_is_directory=True)
     monkeypatch.setenv(
-        "PYTHONPATH", str(project / "streamlit_calculator" / "vendor")
+        "PYTHONPATH",
+        os.pathsep.join((
+            str(project / "python" / "target" / "python"),
+            str(project / "streamlit_calculator" / "vendor"),
+        )),
     )
     ssh = root / "ssh"
     _ = ssh.write_text(

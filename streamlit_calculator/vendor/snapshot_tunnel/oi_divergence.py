@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
+import koopec_calculus
+from snapshot_tunnel.validation import unix_microseconds
+
 _HOUR = timedelta(hours=1)
 _PIVOT_WINDOW = 4
 
@@ -144,43 +147,23 @@ def _momentum(
     Returns:
         One point per input, with unavailable rates during warmup.
 
-    Raises:
-        ValueError: If chronology is invalid or percentage change overflows.
-
     """
-    lookback = int(timedelta(hours=12) / settings.interval)
-    warmup = lookback + 2
-    points: list[MomentumPoint] = []
-    run_start = 0
-    for index, sample in enumerate(samples):
-        if index:
-            delta = (
-                sample.interest.timestamp
-                - samples[index - 1].interest.timestamp
+    rates = koopec_calculus.oi_momentum(
+        int(settings.interval.total_seconds()),
+        [
+            (
+                unix_microseconds(sample.interest.timestamp),
+                unix_microseconds(sample.received or sample.interest.timestamp),
+                sample.interest.value,
+                sample.price,
             )
-            if delta <= timedelta(0):
-                msg = "Market observations must be strictly chronological."
-                raise ValueError(msg)
-            if delta != settings.interval:
-                run_start = index
-        if index - run_start < warmup:
-            points.append(MomentumPoint(sample=sample, rate=None))
-            continue
-        rate = math.fsum(
-            100
-            * (
-                samples[item].interest.value
-                / samples[item - lookback].interest.value
-                - 1
-            )
-            / 3
-            for item in range(index - 2, index + 1)
-        )
-        if not math.isfinite(rate):
-            msg = "OI percentage change overflow."
-            raise ValueError(msg)
-        points.append(MomentumPoint(sample=sample, rate=rate))
-    return tuple(points)
+            for sample in samples
+        ],
+    )
+    return tuple(
+        MomentumPoint(sample=sample, rate=rate)
+        for sample, rate in zip(samples, rates, strict=True)
+    )
 
 
 def _price_pivot(

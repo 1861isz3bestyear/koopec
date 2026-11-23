@@ -21,26 +21,42 @@ pub struct SavedSnapshot {
 /// Equal timestamps retain the first input, matching Python's stable `min`.
 #[must_use]
 pub fn select_daily_snapshots(snapshots: &[SavedSnapshot]) -> Vec<&SavedSnapshot> {
-    const DAY_SECONDS: i64 = 86_400;
-    const TARGET_SECONDS: i128 = 8 * 3_600 + 15 * 60;
-    let mut days: BTreeMap<i64, (&SavedSnapshot, i128)> = BTreeMap::new();
-    for item in snapshots {
-        if item.asset != SnapshotAsset::Btc {
-            continue;
-        }
-        let timestamp = item.snapshot.available_at();
-        let day = timestamp.div_euclid(DAY_SECONDS);
-        let target = i128::from(day) * i128::from(DAY_SECONDS) + TARGET_SECONDS;
+    let receipts = snapshots
+        .iter()
+        .enumerate()
+        .filter_map(|(index, snapshot)| {
+            (snapshot.asset == SnapshotAsset::Btc)
+                .then_some((index, snapshot.snapshot.available_at()))
+        });
+    select_receipts(receipts, 1)
+        .into_iter()
+        .map(|index| &snapshots[index])
+        .collect()
+}
+
+/// Select the same daily receipts from exact Unix microseconds.
+pub fn select_daily_receipts(receipts: impl Iterator<Item = (usize, i64)>) -> Vec<usize> {
+    select_receipts(receipts, 1_000_000)
+}
+
+fn select_receipts(receipts: impl Iterator<Item = (usize, i64)>, precision: i64) -> Vec<usize> {
+    let day_units = 86_400 * precision;
+    let target_offset = i128::from((8 * 3_600 + 15 * 60) * precision);
+    let mut days = BTreeMap::new();
+    for (index, timestamp) in receipts {
+        let day = timestamp.div_euclid(day_units);
+        let target = i128::from(day) * i128::from(day_units) + target_offset;
         let distance = (i128::from(timestamp) - target).abs();
+        let candidate = (distance, timestamp, index);
         days.entry(day)
-            .and_modify(|selected| {
-                if (distance, timestamp) < (selected.1, selected.0.snapshot.available_at()) {
-                    *selected = (item, distance);
+            .and_modify(|selected: &mut (i128, i64, usize)| {
+                if candidate < *selected {
+                    *selected = candidate;
                 }
             })
-            .or_insert((item, distance));
+            .or_insert(candidate);
     }
-    days.into_values().map(|(item, _)| item).collect()
+    days.into_values().map(|(_, _, index)| index).collect()
 }
 
 /// Select the newest saved daily receipt at a cutoff, expiring after 24 hours.

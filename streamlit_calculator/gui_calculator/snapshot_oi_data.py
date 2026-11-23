@@ -6,15 +6,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
+import koopec_calculus
 import requests
 import streamlit as st
-from shared.validation import (
-    json_object,
-    numeric_string,
-    object_list,
-    object_mapping,
-    string,
-)
 from snapshot_tunnel.oi_divergence import InterestSample, MarketSample
 
 from gui_calculator.snapshot_price_data import load_price_history
@@ -23,42 +17,24 @@ if TYPE_CHECKING:
     from snapshot_tunnel.options_model import Snapshot
 
 
-_HOUR_MS = 3_600_000
-
-
 def parse_interest_page(payload: str) -> tuple[tuple[InterestSample, ...], str]:
     """Validate reverse-chronological exchange OI and its pagination cursor.
 
     Returns:
         Positive hourly base-asset OI samples and the next cursor.
 
-    Raises:
-        ValueError: If Bybit reports an error or timestamps are invalid.
-
     """
-    body = json_object(payload)
-    if body.get("retCode") != 0:
-        msg = (
-            f"Bybit OI request failed: {body.get('retMsg', 'invalid response')}"
-        )
-        raise ValueError(msg)
-    result = object_mapping(body["result"])
-    samples: list[InterestSample] = []
-    for raw in object_list(result["list"]):
-        row = object_mapping(raw)
-        stamp = string(row["timestamp"])
-        if not stamp.isdecimal() or int(stamp) <= 0 or int(stamp) % _HOUR_MS:
-            msg = "OI timestamps must be positive hourly epoch milliseconds."
-            raise ValueError(msg)
-        sample = InterestSample(
-            timestamp=datetime.fromtimestamp(int(stamp) / 1000, tz=UTC),
-            value=numeric_string(row["openInterest"]),
-        )
-        if samples and sample.timestamp >= samples[-1].timestamp:
-            msg = "Bybit OI page must be strictly reverse chronological."
-            raise ValueError(msg)
-        samples.append(sample)
-    return tuple(samples), string(result.get("nextPageCursor", ""))
+    samples, cursor = koopec_calculus.bybit_interest_page(payload)
+    return (
+        tuple(
+            InterestSample(
+                timestamp=datetime.fromtimestamp(stamp / 1_000, tz=UTC),
+                value=interest,
+            )
+            for stamp, interest in samples
+        ),
+        cursor,
+    )
 
 
 def fetch_interest_history(

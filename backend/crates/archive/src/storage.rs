@@ -348,3 +348,6 @@ pub fn save_market(
 
 /// Historical candle cache and downloaded range persistence.
 pub mod candles;
+
+/// Online backup and schema validation for transferable market archives.
+pub mod backup;

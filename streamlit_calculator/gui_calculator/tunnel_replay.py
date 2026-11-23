@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import math
-from bisect import bisect_right
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+import koopec_calculus
 import pandas as pd
 from shared.candles import candle_rows
 from shared.strategy_data import validate_prices
@@ -19,6 +19,7 @@ from shared.tunnel import (
 )
 from snapshot_tunnel.options_model import strike_exposures
 from snapshot_tunnel.tunnel_plans import selected_snapshots, tunnel_plans
+from snapshot_tunnel.validation import unix_microseconds
 
 from gui_calculator.ranked_levels import ranked_price_columns
 
@@ -65,13 +66,16 @@ def replay_tunnel(
     )
     records: list[dict[str, object]] = []
     previous: Candle | None = None
-    for bar in candle_rows(data):
-        index = (
-            bisect_right(plans, bar.time, key=lambda item: item.available) - 1
-        )
-        plan = plans[index] if index >= 0 else None
-        if plan is not None and bar.time >= plan.expires:
-            plan = None
+    bars = tuple(candle_rows(data))
+    plan_indices = koopec_calculus.replay_plan_indices(
+        [
+            (unix_microseconds(plan.available), unix_microseconds(plan.expires))
+            for plan in plans
+        ],
+        [unix_microseconds(bar.time.to_pydatetime()) for bar in bars],
+    )
+    for bar, index in zip(bars, plan_indices, strict=True):
+        plan = plans[index] if index is not None else None
         effective = settings.for_gex(plan.levels.gex if plan else None)
         decision = flow.entry(
             TunnelQuote(

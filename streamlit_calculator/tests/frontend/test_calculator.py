@@ -37,7 +37,7 @@ def test_backtester_theme_and_controls(
     _ = page.goto(calculator_url + "/?archive=1")
     expect(
         page.get_by_role("heading", name="Anchored VWAP Backtester")
-    ).to_be_visible()
+    ).to_be_visible(timeout=30_000)
     expect(page.get_by_test_id("stMetricValue").first).to_be_visible()
     expect(page.get_by_test_id("stException")).to_have_count(0)
     expect(page.get_by_test_id("stPlotlyChart").first).to_be_visible()

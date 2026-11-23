@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+import koopec_calculus
 from snapshot_tunnel.daily_gex import DailySettings
 from snapshot_tunnel.daily_plans import plan_from_snapshot
 from snapshot_tunnel.gamma_search import search_flips
 from snapshot_tunnel.option_levels import DEFAULT_LEVEL_RANGE, OptionLevelRange
 from snapshot_tunnel.options_model import strike_exposures
 from snapshot_tunnel.tunnel import NegativeGex, TunnelLevels, TunnelRegime
+from snapshot_tunnel.validation import unix_microseconds
 
 if TYPE_CHECKING:
     from snapshot_tunnel.options_model import Snapshot
@@ -35,22 +37,12 @@ def selected_snapshots(snapshots: tuple[Snapshot, ...]) -> tuple[Snapshot, ...]:
         The closest saved observation to 08:15, ordered chronologically.
 
     """
-    days: dict[date, list[Snapshot]] = {}
-    for snapshot in snapshots:
-        if snapshot.asset == "BTC":
-            days.setdefault(
-                snapshot.timestamp.astimezone(UTC).date(), []
-            ).append(snapshot)
-    return tuple(
-        min(
-            days[day],
-            key=lambda item: (
-                abs(item.timestamp - datetime.combine(day, time(8, 15), UTC)),
-                item.timestamp,
-            ),
-        )
-        for day in sorted(days)
-    )
+    indices = koopec_calculus.daily_receipts([
+        (index, unix_microseconds(snapshot.timestamp))
+        for index, snapshot in enumerate(snapshots)
+        if snapshot.asset == "BTC"
+    ])
+    return tuple(snapshots[index] for index in indices)
 
 
 def tunnel_plans(

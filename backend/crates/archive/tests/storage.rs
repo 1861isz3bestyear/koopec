@@ -222,3 +222,45 @@ fn failed_compact_receipt_does_not_leave_an_orphan_payload() {
             .is_empty()
     );
 }
+
+#[test]
+fn online_backup_includes_committed_wal_and_validates_schema() {
+    use archive::storage::backup::{snapshot, validate};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.sqlite");
+    let copy = directory.path().join("backup.sqlite");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    save_market(&path, &observation("spot", ""), None, true).unwrap();
+    assert!(snapshot(&path, &path).is_err());
+    snapshot(&path, &copy).unwrap();
+    assert_eq!(
+        load_market(&copy, window("ETH", RECEIPT, &["spot"]))
+            .unwrap()
+            .len(),
+        1
+    );
+    connection
+        .pragma_update(None, "foreign_keys", false)
+        .unwrap();
+    connection
+        .execute("DELETE FROM tunnel_payloads", [])
+        .unwrap();
+    assert!(validate(&path).is_err());
+    validate(&copy).unwrap();
+}
+
+#[test]
+fn archive_validation_rejects_unrelated_files_and_incomplete_schema() {
+    use archive::storage::backup::validate;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("invalid.sqlite");
+    let connection = Connection::open(&path).unwrap();
+    assert!(validate(&path).is_err());
+    connection
+        .execute_batch("CREATE TABLE tunnel_inputs (id INTEGER PRIMARY KEY)")
+        .unwrap();
+    assert!(validate(&path).is_err());
+}

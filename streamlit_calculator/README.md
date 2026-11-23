@@ -17,14 +17,14 @@ The default archive is `../gex_downloads/tunnel_inputs.sqlite`, in the
 enter a path in the UI to use a different archive.
 
 The release-mode PyO3 extension serves the archive collection index, market
-receipt reads and writes, options snapshot and candle persistence, and strike
-exposure in profiles and snapshot history, ranked call and put walls, max pain,
-Deribit request construction and options-chain normalization, and public Bitget
-request construction, parsing, and hourly and daily momentum.
-The calculator and Rust archive reader share the Deribit normalizer. Python
-provides Streamlit, HTTP transport, snapshot serialization, archive
-maintenance and SSH transfer, gamma-flip search, other oscillator and options
-calculations, strategy planning, and replay execution. Replay uses Rust for its displayed wall ranks.
+receipt reads and writes, online backups, and options snapshot and candle
+persistence. It also handles strike exposure, wall ranks, max pain, Deribit
+requests and chain normalization, Bitget data and momentum, Bybit OI page
+parsing and momentum, and daily receipt and replay window selection.
+
+Python provides Streamlit, HTTP transport, snapshot serialization, archive
+merge and retention, SSH transfer, gamma-flip search, other analytics, and
+strategy planning and execution.
 
 ## Tests
 

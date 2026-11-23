@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+import koopec_calculus
 from market_storage.archive import Archive
 from market_storage.inputs import CalculationInputs, load_inputs
 from market_storage.models import Source, Window
@@ -26,6 +27,7 @@ from snapshot_tunnel.tunnel_flow import (
     oi_confirmation_series,
     oi_signal_direction,
 )
+from snapshot_tunnel.validation import unix_microseconds
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -84,16 +86,11 @@ def daily_collections(
         At most one complete collection per UTC day, with earlier ties first.
 
     """
-    selected: dict[datetime, RecordedCollection] = {}
-    for record in source.collections:
-        receipt = record.window.end.astimezone(UTC)
-        target = datetime.combine(receipt.date(), time(8, 15), UTC)
-        previous = selected.get(target)
-        if previous is None or abs(receipt - target) < abs(
-            previous.window.end - target
-        ):
-            selected[target] = record
-    return tuple(selected[day] for day in sorted(selected))
+    indices = koopec_calculus.daily_receipts([
+        (index, unix_microseconds(record.window.end))
+        for index, record in enumerate(source.collections)
+    ])
+    return tuple(source.collections[index] for index in indices)
 
 
 def load_archive_snapshots(source: LocalArchiveSource) -> tuple[Snapshot, ...]:
