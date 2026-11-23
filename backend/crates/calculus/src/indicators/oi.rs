@@ -56,6 +56,7 @@ impl InterestObservation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OiMomentum {
     interval: Interval,
+    step: i64,
     window: VecDeque<InterestObservation>,
     previous: Option<i64>,
 }
@@ -63,17 +64,26 @@ impl OiMomentum {
     pub fn new(interval: Interval) -> Self {
         Self {
             interval,
+            step: interval.seconds(),
             window: VecDeque::new(),
             previous: None,
         }
     }
+    /// Use exact microsecond observations while retaining the same lookback.
+    pub fn with_microseconds(interval: Interval) -> Self {
+        Self {
+            step: interval.seconds() * 1_000_000,
+            ..Self::new(interval)
+        }
+    }
+
     /// Process a matched sample atomically; a gap resets the window.
     pub fn update(&mut self, point: InterestObservation) -> Result<IndicatorState, IndicatorError> {
         let gap = check_time(
             point.observed_at,
             point.available_at,
             self.previous,
-            self.interval.seconds(),
+            self.step,
         )?;
         let mut next = self.clone();
         if gap {

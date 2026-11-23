@@ -1,6 +1,7 @@
 //! Deterministic domain types and replay primitives.
 pub mod accounts;
 pub mod execution;
+pub mod gex;
 pub mod indicators;
 pub mod metrics;
 pub mod options;

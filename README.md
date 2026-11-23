@@ -1,7 +1,13 @@
 # Koopec
 
-The Rust workspace is in `backend/`; the TypeScript starter frontend is in `frontend/`.
+Run the Streamlit calculator with `./calculator`. See
+[streamlit_calculator](streamlit_calculator/README.md) for setup.
 
-Run the API with `cd backend && cargo run -p http-api` (listens on `127.0.0.1:8000`). In a second terminal, run `cd frontend && corepack pnpm install --frozen-lockfile && corepack pnpm dev`. Vite proxies `/v1` requests to the API. The chart accepts local CSV files with `time,open,high,low,close` columns; timestamps are Unix seconds or ISO 8601. The options panel sends a snapshot JSON to the existing exposure endpoint.
-
-The backend is a work in progress: dataset loading, candle services, backtests, and live trading are not implemented. See `backend/README.md` for the Rust workspace's current scope.
+The Rust backend contains `calculus` for calculations, `archive` for local
+archive access, `market-data` for exchange adapters, and `server-bot` for
+order state. Through PyO3, the calculator uses these crates for BTC archive
+coverage and payload reads, snapshot and candle persistence, strike exposure
+profiles, wall ranks, max pain, Deribit requests and chain normalization, and
+public Bitget lending data and momentum. The local Python dependencies under
+`streamlit_calculator/vendor/` still provide archive maintenance and SSH
+transfer, other analytics, and strategy replay.

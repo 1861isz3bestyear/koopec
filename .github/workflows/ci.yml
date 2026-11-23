@@ -8,44 +8,6 @@ permissions:
   contents: read
 
 jobs:
-  frontend:
-    name: Frontend checks
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: corepack enable
-      - run: corepack pnpm install --frozen-lockfile
-      - run: corepack pnpm lint
-      - run: corepack pnpm build
-      - run: corepack pnpm test
-      - run: corepack pnpm coverage
-  e2e:
-    name: Chromium end-to-end
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: corepack enable
-      - run: corepack pnpm install --frozen-lockfile
-      - run: corepack pnpm exec playwright install --with-deps chromium
-      - run: corepack pnpm e2e
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-results
-          path: frontend/test-results/
-          if-no-files-found: ignore
   backend:
     name: Backend checks
     runs-on: ubuntu-latest
@@ -59,3 +21,44 @@ jobs:
       - run: cargo test --workspace
       - run: cargo install cargo-llvm-cov --locked
       - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 95.01
+  python-extension:
+    name: Python extension (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install pytest
+      - run: PYO3_PYTHON="$(command -v python)" ./python/tests/run-native.sh
+  calculator:
+    name: Calculator Python and Chromium
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked Python and Chromium dependencies
+        id: calculator_setup
+        run: |
+          uv sync --locked
+          uv run --locked playwright install --with-deps chromium
+      - name: Run Python and browser suite
+        run: ./streamlit_calculator/test.sh
+      - name: Check Python formatting, lint and types
+        if: always() && steps.calculator_setup.outcome == 'success'
+        run: |
+          uv run --locked black --check .
+          uv run --locked ruff check .
+          uv run --locked basedpyright
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calculator-browser-results
+          path: streamlit_calculator/test-results/
+          if-no-files-found: warn

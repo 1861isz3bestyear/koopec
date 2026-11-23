@@ -5,7 +5,7 @@ mod oi;
 mod pivots;
 
 pub use book::{BookLevel, book_rate};
-pub use margin::{GrowthObservation, MarginMomentum};
+pub use margin::{GrowthCadence, GrowthObservation, MarginMomentum};
 pub use oi::{InterestObservation, Interval, OiMomentum};
 pub use pivots::{
     Comparison, Pivot, PivotKind, PivotPoint, SwingRelation, compare_pivots, detect_pivot,

@@ -48,3 +48,33 @@ impl PositiveTunnel {
         })
     }
 }
+
+/// Receipt and exclusive expiry of an ordered replay plan, in Unix microseconds.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanWindow {
+    pub available: i64,
+    pub expires: i64,
+}
+
+/// Assign the newest observable plan to each opening quote. Expired plans leave a gap.
+pub fn active_plan_indices(
+    plans: &[PlanWindow],
+    quotes: &[i64],
+) -> Result<Vec<Option<usize>>, InvalidTunnel> {
+    if plans.iter().any(|plan| plan.expires <= plan.available)
+        || plans
+            .windows(2)
+            .any(|pair| pair[0].available >= pair[1].available)
+    {
+        return Err(InvalidTunnel);
+    }
+    Ok(quotes
+        .iter()
+        .map(|quote| {
+            plans
+                .partition_point(|plan| plan.available <= *quote)
+                .checked_sub(1)
+                .filter(|&index| *quote < plans[index].expires)
+        })
+        .collect())
+}

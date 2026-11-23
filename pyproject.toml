@@ -1,0 +1,129 @@
+[project]
+name = "koopec-calculator"
+version = "0.1.0"
+description = "Koopec Streamlit calculator and Rust-backed analytics"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "numpy>=2.0.0",
+    "pandas>=2.2.0",
+    "plotly>=5.22.0",
+    "requests>=2.32.0",
+    "streamlit>=1.59.2",
+    "websockets>=14.0",
+]
+
+[dependency-groups]
+dev = [
+    "archetype-py>=0.6.0",
+    "axe-playwright-python>=0.1.8",
+    "basedpyright>=1.40.1",
+    "black>=25.9.0",
+    "hypothesis>=6.168.2",
+    "import-linter>=2.15",
+    "pandas-stubs>=2.2.0",
+    "pip-audit>=2.10.1",
+    "playwright>=1.64.1",
+    "plotly-stubs>=0.0.6",
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "pytest-playwright>=0.10.0",
+    "ruff>=0.13.2",
+    "types-requests>=2.32.0",
+    "typing-extensions>=4.16.0",
+]
+
+[tool.black]
+line-length = 80
+target-version = ["py314"]
+preview = true
+unstable = true
+
+[tool.ruff]
+line-length = 80
+target-version = "py314"
+preview = true
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # Pytest relies on bare assertions for assertion rewriting and diagnostics.
+    "assert",
+    # D203 requires a blank line before class docstrings; D211 forbids it.
+    "incorrect-blank-line-before-class",
+    # D213 requires summaries on line two; D212 requires the first line.
+    "multi-line-summary-second-line",
+    # COM812 can require trailing commas that Black removes.
+    "missing-trailing-comma",
+    # ISC001 forbids adjacent strings on one line, which Black can produce.
+    "single-line-implicit-string-concatenation",
+    # Redundant aliases are the typed, explicit re-export syntax used by the
+    # compatibility API and BasedPyright's private-import checks.
+    "useless-import-alias",
+    # Streamlit executes the entrypoint as a script, so the repository root
+    # must be added to sys.path before importing the local packages.
+    "module-import-not-at-top-of-file",
+    # Streamlit AppTest copies function source into an isolated script, so test
+    # entrypoints must import the names they use inside their function bodies.
+    "import-outside-top-level",
+    # Python cannot parenthesize a nonlocal statement; splitting a declaration
+    # is required when the combined names exceed the configured line length.
+    "repeated-global",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["gui_calculator", "tests"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-positional-args = 3
+max-branches = 12
+max-locals = 15
+max-statements = 50
+max-returns = 6
+max-bool-expr = 5
+max-nested-blocks = 3
+
+[tool.pytest.ini_options]
+testpaths = ["streamlit_calculator/gui_calculator", "streamlit_calculator/tests", "streamlit_calculator/vendor/shared"]
+pythonpath = ["streamlit_calculator", "streamlit_calculator/vendor", "python/target/python"]
+python_files = ["test_*.py"]
+markers = [
+    "module: subsystem behavior with real persistence or protocol boundaries",
+    "integration: multiple production components exercised together",
+    "e2e: complete application workflow through external boundaries",
+    "contract: compatibility between independently loaded projects",
+]
+addopts = "--cov=gui_calculator --cov=snapshot_tunnel --cov=shared.gex --cov=shared.volume_profile --cov=shared.open_interest --cov-branch --cov-report=term-missing --cov-fail-under=92 --tracing=retain-on-failure --screenshot=only-on-failure --full-page-screenshot"
+strict_markers = true
+strict_config = true
+
+[tool.coverage.run]
+# Include the production Streamlit server spawned by the browser fixtures.
+# Keep exactly the same scope and branch accounting as the pytest-cov gate.
+source = ["gui_calculator", "snapshot_tunnel", "shared.gex", "shared.volume_profile", "shared.open_interest"]
+branch = true
+concurrency = ["multiprocessing"]
+sigterm = true
+omit = ["*/test_*.py"]
+
+[tool.uv]
+package = false
+
+[tool.basedpyright]
+include = ["streamlit_calculator", "python/tests", "python/koopec_calculus.pyi"]
+extraPaths = ["streamlit_calculator", "streamlit_calculator/vendor", "python/target/python"]
+pythonVersion = "3.14"
+pythonPlatform = "All"
+typeCheckingMode = "all"
+failOnWarnings = true
+reportAny = "error"
+reportExplicitAny = "error"
+enableTypeIgnoreComments = false
+reportIgnoreCommentWithoutRule = "error"
+reportUnnecessaryTypeIgnoreComment = "error"
+# Black can emit adjacent string literals when wrapping long text.
+reportImplicitStringConcatenation = "none"

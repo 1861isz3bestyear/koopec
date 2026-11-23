@@ -1,7 +1,7 @@
 use super::{IndicatorError, IndicatorState, check_time};
 use std::collections::VecDeque;
 
-/// Signed growth at an observed time, with actual receipt time in Unix seconds.
+/// Signed growth with observation and receipt timestamps in the processor's units.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GrowthObservation {
     observed_at: i64,
@@ -20,19 +20,63 @@ impl GrowthObservation {
         })
     }
 }
-/// Fourteen consecutive hourly growth observations.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Cadence of published margin growth observations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrowthCadence {
+    Hourly,
+    Daily,
+}
+
+impl GrowthCadence {
+    fn seconds(self) -> i64 {
+        match self {
+            Self::Hourly => 3_600,
+            Self::Daily => 86_400,
+        }
+    }
+}
+
+/// Fourteen consecutive growth observations at a fixed cadence.
+#[derive(Debug, Clone, PartialEq)]
 pub struct MarginMomentum {
+    step: i64,
     window: VecDeque<GrowthObservation>,
     previous: Option<i64>,
+}
+impl Default for MarginMomentum {
+    fn default() -> Self {
+        Self::with_cadence(GrowthCadence::Hourly)
+    }
 }
 impl MarginMomentum {
     pub fn new() -> Self {
         Self::default()
     }
+    /// Process growth with timestamps in Unix seconds.
+    pub fn with_cadence(cadence: GrowthCadence) -> Self {
+        Self {
+            step: cadence.seconds(),
+            window: VecDeque::new(),
+            previous: None,
+        }
+    }
+
+    /// Preserve millisecond precision from exchange history.
+    pub fn with_millisecond_cadence(cadence: GrowthCadence) -> Self {
+        Self {
+            step: cadence.seconds() * 1_000,
+            ..Self::with_cadence(cadence)
+        }
+    }
+
     /// Process an observation atomically. A valid gap starts a new window.
     pub fn update(&mut self, point: GrowthObservation) -> Result<IndicatorState, IndicatorError> {
-        let gap = check_time(point.observed_at, point.available_at, self.previous, 3600)?;
+        let gap = check_time(
+            point.observed_at,
+            point.available_at,
+            self.previous,
+            self.step,
+        )?;
         let mut next = self.clone();
         if gap {
             next.window.clear();
@@ -87,5 +131,49 @@ impl MarginMomentum {
         };
         *self = next;
         Ok(state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daily_momentum_requires_fourteen_consecutive_days() {
+        let mut momentum = MarginMomentum::with_cadence(GrowthCadence::Daily);
+        for day in 0..14 {
+            let timestamp = day * 86_400;
+            let state = momentum
+                .update(GrowthObservation::new(timestamp, timestamp, 0.0).unwrap())
+                .unwrap();
+            if day < 13 {
+                assert_eq!(
+                    state,
+                    IndicatorState::WarmingUp {
+                        observed: day as usize + 1,
+                        required: 14
+                    }
+                );
+            } else {
+                assert_eq!(
+                    state,
+                    IndicatorState::Ready {
+                        value: 50.0,
+                        observed_at: timestamp,
+                        available_at: timestamp
+                    }
+                );
+            }
+        }
+        let timestamp = 15 * 86_400;
+        assert_eq!(
+            momentum
+                .update(GrowthObservation::new(timestamp, timestamp, 0.0).unwrap())
+                .unwrap(),
+            IndicatorState::Gap {
+                observed: 1,
+                required: 14
+            }
+        );
     }
 }

@@ -1,0 +1,12 @@
+[package]
+name = "market-data"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+calculus = { path = "../calculus" }
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "koopec-python"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "koopec_calculus"
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = "1"
+archive = { path = "../backend/crates/archive" }
+calculus = { path = "../backend/crates/calculus" }
+market-data = { path = "../backend/crates/market-data" }
+pyo3 = { version = "0.27.1", features = ["extension-module"] }
+
+[workspace]
+
+[build-dependencies]
+pyo3-build-config = "0.27.1"
