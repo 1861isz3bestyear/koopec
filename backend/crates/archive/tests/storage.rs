@@ -264,3 +264,83 @@ fn archive_validation_rejects_unrelated_files_and_incomplete_schema() {
         .unwrap();
     assert!(validate(&path).is_err());
 }
+
+#[test]
+fn merge_compacts_raw_rows_deduplicates_and_preserves_destination_on_conflict() {
+    use archive::storage::merge::{check, merge};
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.sqlite");
+    let destination = directory.path().join("output.sqlite");
+    let item = observation("spot", "");
+    save_market(&source, &item, None, false).unwrap();
+    save_market(&source, &item, None, true).unwrap();
+    let report = merge(&source, &destination).unwrap();
+    assert_eq!((report.observations, report.duplicates), (1, 1));
+    let spot = report
+        .timelines
+        .iter()
+        .find(|row| row.source == "spot")
+        .unwrap();
+    assert_eq!((spot.successful, spot.missing), (1, 0));
+    assert_eq!(spot.first, START);
+    let empty = report
+        .timelines
+        .iter()
+        .find(|row| row.source == "oi")
+        .unwrap();
+    assert_eq!((empty.successful, empty.missing), (0, 1));
+
+    let mut conflict = observation("spot", "");
+    conflict.payload = "{\"data\":1}".into();
+    let other = directory.path().join("conflict.sqlite");
+    save_market(&other, &conflict, None, true).unwrap();
+    let before = std::fs::read(&destination).unwrap();
+    assert!(
+        merge(&other, &destination)
+            .unwrap_err()
+            .to_string()
+            .contains("Conflicting")
+    );
+    assert_eq!(std::fs::read(&destination).unwrap(), before);
+    assert_eq!(check(&destination).unwrap().observations, 1);
+}
+
+#[test]
+fn collection_due_and_retention_preserve_receipt_cutoffs_and_copy_managed_files() {
+    use archive::storage::{market_due, prune_unmanaged};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("market.sqlite");
+    assert!(market_due(&path, "ETH", "spot", RECEIPT, 300).unwrap());
+    assert!(!prune_unmanaged(&path, RECEIPT).unwrap());
+    save_market(&path, &observation("spot", ""), None, true).unwrap();
+    save_market(&path, &observation("oi", "failed"), None, false).unwrap();
+    assert!(market_due(&path, "ETH", "spot", BEFORE, 300).unwrap());
+    assert!(!market_due(&path, "ETH", "spot", RECEIPT, 300).unwrap());
+    assert!(market_due(&path, "ETH", "oi", RECEIPT, 300).unwrap());
+    assert!(market_due(&path, "ETH", "oi", RECEIPT, 0).is_err());
+
+    assert!(!prune_unmanaged(&path, RECEIPT).unwrap());
+    assert_eq!(
+        load_market(&path, window("ETH", RECEIPT, &["spot"]))
+            .unwrap()
+            .len(),
+        1
+    );
+    let later = "2026-11-09T12:00:02+00:00";
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TABLE copy_receipts (fingerprint TEXT)")
+        .unwrap();
+    assert!(prune_unmanaged(&path, later).unwrap());
+    assert_eq!(
+        load_market(&path, window("ETH", RECEIPT, &["spot"]))
+            .unwrap()
+            .len(),
+        1
+    );
+    db.execute_batch("DROP TABLE copy_receipts").unwrap();
+    assert!(!prune_unmanaged(&path, later).unwrap());
+    let payloads: i64 = db
+        .query_row("SELECT count(*) FROM tunnel_payloads", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(payloads, 0);
+}

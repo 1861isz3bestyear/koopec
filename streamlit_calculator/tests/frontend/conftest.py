@@ -42,6 +42,7 @@ def run_server(port: int, theme: str) -> None:
     _ = importlib.import_module("unittest.mock")
     _ = importlib.import_module("streamlit.runtime.scriptrunner.magic_funcs")
     _ = importlib.import_module("gui_calculator.app")
+    _ = importlib.import_module("tests.frontend.archive_fixture")
     options = {
         "server.port": port,
         "server.address": "127.0.0.1",

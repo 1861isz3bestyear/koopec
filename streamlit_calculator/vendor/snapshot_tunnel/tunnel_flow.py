@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from io import StringIO
 from typing import TYPE_CHECKING
 
+import koopec_calculus
 from snapshot_tunnel.bitget import Growth, growth_momentum
 from snapshot_tunnel.daily_flow import FlowPoint, recorded_points
 from snapshot_tunnel.oi_divergence import (
@@ -154,9 +155,8 @@ class TunnelFlow:
             else 0
         )
         required = max(1, settings.votes)
-        calculatable = len(
-            self.available(now, settings=settings)
-        ) >= required and (
+        available = len(self.available(now, settings=settings))
+        calculatable = available >= required and (
             not settings.use_gex
             or (
                 levels is not None
@@ -181,8 +181,12 @@ class TunnelFlow:
         return ConfirmationDecision(
             direction=(
                 direction
-                if votes >= required
-                and self._oi_confirms(direction, now, settings=settings)
+                if koopec_calculus.tunnel_entry_allowed(
+                    direction,
+                    (required, votes, available),
+                    settings.use_gex and settings.use_oi,
+                    self._oi_direction(now, settings=settings),
+                )
                 else 0
             ),
             votes=votes,
@@ -190,27 +194,21 @@ class TunnelFlow:
             gex_direction=gex_direction,
         )
 
-    def _oi_confirms(
-        self, direction: int, now: datetime, *, settings: TunnelSettings
-    ) -> bool:
-        """Require enabled OI to match the order in the signed GEX regime.
+    def _oi_direction(self, now: datetime, *, settings: TunnelSettings) -> int:
+        """Read the mandatory OI confirmation.
 
         Returns:
-            Whether the mandatory regime-specific OI condition is satisfied.
+            The fresh OI vote, or zero when unavailable or optional.
 
         """
         if not settings.use_gex or not settings.use_oi:
-            return True
+            return 0
         point = fresh_observation(
             self.oi_stream(settings.oi_mode),
             now,
             maximum_age=settings.maximum_age,
         )
-        return (
-            point is not None
-            and direction != 0
-            and point.direction == direction
-        )
+        return point.direction if point is not None else 0
 
     def confirmations(
         self, now: datetime, *, settings: TunnelSettings

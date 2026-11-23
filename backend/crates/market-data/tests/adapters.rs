@@ -68,3 +68,32 @@ fn loan_rates_are_nonnegative_and_exchange_errors_fail() {
     assert!(loan_rate(&payload.replace("0.01", "-0.01")).is_err());
     assert!(loan_rate(&payload.replace("00000", "40000")).is_err());
 }
+
+#[test]
+fn recorded_depth_sorts_prices_and_requires_exact_causal_receipt_and_positive_unique_levels() {
+    use market_data::{depth, depth_time};
+    let source = r#"{"retCode":0,"result":{"s":"BTCUSDT","ts":30000,"b":[["99","3"],["100","1"]],"a":[["102","1"],["101","2"]]}}"#;
+    assert_eq!(depth_time(source, "BTC").unwrap(), 30_000);
+    let book = depth(source, "BTC", 30_000_125).unwrap();
+    assert_eq!(book.bids[0].price(), 100.0);
+    assert_eq!(book.asks[0].quantity(), 2.0);
+    assert!(depth(source, "BTC", 29_999_999).is_err());
+    assert!(depth(source, "BTC", 40_000_000).is_ok());
+    assert!(depth(source, "BTC", 40_000_001).is_err());
+    assert!(
+        depth(
+            &source.replace(r#"["99","3"]"#, r#"["100","3"]"#),
+            "BTC",
+            30_000_125
+        )
+        .is_err()
+    );
+    assert!(
+        depth(
+            &source.replace(r#"["99","3"]"#, r#"["99","0"]"#),
+            "BTC",
+            30_000_125
+        )
+        .is_err()
+    );
+}

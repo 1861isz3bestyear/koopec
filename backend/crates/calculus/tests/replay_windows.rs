@@ -75,3 +75,14 @@ fn oi_momentum_resets_on_a_one_microsecond_gap() {
         IndicatorState::Gap { .. }
     ));
 }
+
+#[test]
+fn positive_tunnel_direction_respects_flip_threshold_and_ambiguity() {
+    use calculus::plans::{PositiveTunnel, TunnelState};
+    let tunnel = PositiveTunnel::new(100.0, 110.0, 95.0).unwrap();
+    assert_eq!(tunnel.direction(TunnelState::FlipBelow, 100.0, 0.0), 1);
+    assert_eq!(tunnel.direction(TunnelState::FlipBelow, 110.0, 0.0), -1);
+    assert_eq!(tunnel.direction(TunnelState::FlipBelow, 105.0, 0.1), 0);
+    assert_eq!(tunnel.direction(TunnelState::FlipInside, 100.0, 0.0), 0);
+    assert_eq!(tunnel.direction(TunnelState::Tight, 95.0, 0.1), 0);
+}

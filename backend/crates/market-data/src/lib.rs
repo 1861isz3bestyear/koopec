@@ -177,8 +177,7 @@ fn levels(value: &Value) -> Result<(Vec<BookLevel>, Vec<f64>), InvalidData> {
     Ok((levels, prices))
 }
 
-/// Validate a Bybit book, including symbol, crossed prices, and receipt freshness.
-pub fn book(text: &str, asset: &str, available_ms: i64) -> Result<Book, InvalidData> {
+fn bybit_book_result(text: &str, asset: &str) -> Result<(Value, i64), InvalidData> {
     if !matches!(asset, "BTC" | "ETH") {
         return Err(InvalidData);
     }
@@ -193,11 +192,53 @@ pub fn book(text: &str, asset: &str, available_ms: i64) -> Result<Book, InvalidD
     if timestamp.fract() != 0.0 || timestamp < 0.0 || timestamp > 253_402_300_799_000.0 {
         return Err(InvalidData);
     }
-    let observed_ms = timestamp as i64;
+    Ok((result.clone(), timestamp as i64))
+}
+
+/// The exchange timestamp of a successful response, needed before the clock-lead wait.
+pub fn depth_time(text: &str, asset: &str) -> Result<i64, InvalidData> {
+    bybit_book_result(text, asset).map(|(_, timestamp)| timestamp)
+}
+
+/// Validate full recorded depth against its exact receipt, with sorted unique positive levels.
+pub fn depth(text: &str, asset: &str, received_us: i64) -> Result<Book, InvalidData> {
+    let (result, observed_ms) = bybit_book_result(text, asset)?;
+    let age = received_us
+        .checked_sub(observed_ms * 1_000)
+        .ok_or(InvalidData)?;
+    if !(0..=10_000_000).contains(&age) {
+        return Err(InvalidData);
+    }
+    let mut result = book_levels(&result, observed_ms, received_us.div_euclid(1_000))?;
+    result
+        .bids
+        .sort_by(|left, right| right.price().total_cmp(&left.price()));
+    result
+        .asks
+        .sort_by(|left, right| left.price().total_cmp(&right.price()));
+    for side in [&result.bids, &result.asks] {
+        if side.iter().any(|level| level.quantity() <= 0.0)
+            || side
+                .windows(2)
+                .any(|pair| pair[0].price() == pair[1].price())
+        {
+            return Err(InvalidData);
+        }
+    }
+    Ok(result)
+}
+
+/// Validate a Bybit book, including symbol, crossed prices, and receipt freshness.
+pub fn book(text: &str, asset: &str, available_ms: i64) -> Result<Book, InvalidData> {
+    let (result, observed_ms) = bybit_book_result(text, asset)?;
     let age = available_ms.checked_sub(observed_ms).ok_or(InvalidData)?;
     if !(0..=10_000).contains(&age) {
         return Err(InvalidData);
     }
+    book_levels(&result, observed_ms, available_ms)
+}
+
+fn book_levels(result: &Value, observed_ms: i64, available_ms: i64) -> Result<Book, InvalidData> {
     let (bids, bid_prices) = levels(result.get("b").ok_or(InvalidData)?)?;
     let (asks, ask_prices) = levels(result.get("a").ok_or(InvalidData)?)?;
     if bid_prices.iter().copied().fold(f64::NEG_INFINITY, f64::max)

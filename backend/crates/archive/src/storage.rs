@@ -125,7 +125,7 @@ pub struct MarketWindow {
     pub sources: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Observation {
     pub asset: String,
     pub source: String,
@@ -315,11 +315,31 @@ pub fn save_market(
     let mut db = writer(path)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     prepare_market(&tx)?;
+    insert_market(
+        &tx,
+        &Observation {
+            requested: iso(requested),
+            available: iso(available),
+            ..item.clone()
+        },
+        &iso(minute),
+        compact,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn insert_market(
+    db: &Connection,
+    item: &Observation,
+    minute: &str,
+    compact: bool,
+) -> Result<(), StorageError> {
     let (sql, body) = if compact {
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(item.payload.as_bytes())?;
         let digest = payload_digest(item.payload.as_bytes());
-        tx.execute(
+        db.execute(
             "INSERT OR IGNORE INTO tunnel_payloads VALUES (?1,'zlib',?2)",
             params![digest, encoder.finish()?],
         )?;
@@ -329,25 +349,91 @@ pub fn save_market(
         ("INSERT INTO tunnel_inputs
           (asset,source,requested_at,available_at,payload,error,collection_id,minute_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", item.payload.clone())
     };
-    tx.execute(
+    db.execute(
         sql,
         params![
             item.asset,
             item.source,
-            iso(requested),
-            iso(available),
+            item.requested,
+            item.available,
             body,
             item.error,
             item.collection,
-            iso(minute)
+            minute
         ],
     )?;
-    tx.commit()?;
     Ok(())
 }
+
+/// Staged archive consolidation and gap reporting.
+pub mod merge;
 
 /// Historical candle cache and downloaded range persistence.
 pub mod candles;
 
 /// Online backup and schema validation for transferable market archives.
 pub mod backup;
+
+/// Check whether this UTC collection bucket still needs a successful response.
+pub fn market_due(
+    path: &Path,
+    asset: &str,
+    source: &str,
+    now: &str,
+    interval: i64,
+) -> Result<bool, StorageError> {
+    let now = time(now)?;
+    if !valid_asset(asset) || !matches!(interval, 300 | 3600) {
+        return Err(StorageError::Invalid("Invalid market collection cadence"));
+    }
+    if !path.try_exists()? {
+        return Ok(true);
+    }
+    let second =
+        now.timestamp() + i64::from(now.timestamp() < 0 && now.timestamp_subsec_nanos() > 0);
+    let start = DateTime::from_timestamp(second.div_euclid(interval) * interval, 0)
+        .ok_or(StorageError::Invalid("Invalid market collection bucket"))?;
+    let db = reader(path)?;
+    for table in ["tunnel_inputs", "tunnel_observations"] {
+        if exists(&db, table)? {
+            let query = format!(
+                "SELECT EXISTS(SELECT 1 FROM {table} WHERE asset=?1 AND source=?2
+                AND error='' AND requested_at>=?3 AND available_at<=?4)"
+            );
+            let received: bool = db.query_row(
+                &query,
+                params![asset, source, iso(start), iso(now)],
+                |row| row.get(0),
+            )?;
+            if received {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Remove observations before the cutoff, or delegate to copied-receipt retention.
+pub fn prune_unmanaged(path: &Path, cutoff: &str) -> Result<bool, StorageError> {
+    let cutoff = iso(time(cutoff)?);
+    if !path.try_exists()? {
+        return Ok(false);
+    }
+    let mut db = writer(path)?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if exists(&tx, "copy_receipts")? {
+        return Ok(true);
+    }
+    prepare_market(&tx)?;
+    tx.execute("DELETE FROM tunnel_inputs WHERE available_at<?1", [&cutoff])?;
+    tx.execute(
+        "DELETE FROM tunnel_observations WHERE available_at<?1",
+        [&cutoff],
+    )?;
+    tx.execute(
+        "DELETE FROM tunnel_payloads WHERE digest NOT IN (SELECT digest FROM tunnel_observations)",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(false)
+}

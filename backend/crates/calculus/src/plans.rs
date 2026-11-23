@@ -78,3 +78,16 @@ pub fn active_plan_indices(
         })
         .collect())
 }
+
+impl PositiveTunnel {
+    /// An eligible wall gives a single direction. Overlapping eligible walls are neutral.
+    pub fn direction(self, state: TunnelState, price: f64, proximity: f64) -> i8 {
+        if !price.is_finite() || price <= self.flip || !proximity.is_finite() || proximity < 0.0 {
+            return 0;
+        }
+        let long =
+            state != TunnelState::FlipInside && (price / self.lower - 1.0).abs() <= proximity;
+        let short = state != TunnelState::Tight && (price / self.upper - 1.0).abs() <= proximity;
+        i8::from(long) - i8::from(short)
+    }
+}

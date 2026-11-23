@@ -9,14 +9,9 @@ from datetime import UTC, datetime, timedelta
 from time import sleep
 from typing import TYPE_CHECKING
 
-from snapshot_tunnel.order_book import BookSnapshot, parse_book_history
-from snapshot_tunnel.validation import (
-    integer,
-    json_object,
-    numeric_string,
-    object_list,
-    object_mapping,
-)
+import koopec_calculus
+from snapshot_tunnel.order_book import BookLevel, BookSnapshot
+from snapshot_tunnel.validation import unix_microseconds
 
 if TYPE_CHECKING:
     import requests
@@ -59,43 +54,22 @@ def parse_depth(
     Returns:
         A two-sided, uncrossed, timely full book.
 
-    Raises:
-        ValueError: If the exchange, symbol, levels or timestamps are invalid.
-
     """
-    body = json_object(payload)
-    result = object_mapping(body.get("result"))
-    if integer(body["retCode"]) != 0 or result.get("s") != f"{asset}USDT":
-        msg = "Bybit depth request failed or returned the wrong market."
-        raise ValueError(msg)
-    observed = datetime.fromtimestamp(numeric_string(result["ts"]) / 1000, UTC)
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(("time", "available_at", "side", "price", "quantity"))
-    for side, key in (("bid", "b"), ("ask", "a")):
-        levels = object_list(result[key])
-        if not 1 <= len(levels) <= DEPTH_LIMIT:
-            msg = "Bybit depth must contain 1-50 levels per side."
-            raise ValueError(msg)
-        for item in levels:
-            level = object_list(item)
-            if len(level) != LEVEL_WIDTH:
-                msg = "Bybit depth levels require price and quantity."
-                raise ValueError(msg)
-            writer.writerow((
-                observed.isoformat(),
-                received.isoformat(),
-                side,
-                numeric_string(level[0]),
-                numeric_string(level[1]),
-            ))
-    book = parse_book_history(
-        output.getvalue(), maximum_age=MAXIMUM_DEPTH_AGE
-    ).snapshots[0]
-    if not book.fresh(MAXIMUM_DEPTH_AGE):
-        msg = "Bybit depth is stale at receipt."
-        raise ValueError(msg)
-    return book
+    observed, bids, asks = koopec_calculus.parse_depth(
+        payload, asset, unix_microseconds(received)
+    )
+    return BookSnapshot(
+        observed=datetime.fromtimestamp(observed / 1_000, UTC),
+        available=received,
+        bids=tuple(
+            BookLevel(price=price, quantity=quantity)
+            for price, quantity in bids
+        ),
+        asks=tuple(
+            BookLevel(price=price, quantity=quantity)
+            for price, quantity in asks
+        ),
+    )
 
 
 def fetch_depth(session: requests.Session, *, asset: str) -> BookSnapshot:
@@ -108,23 +82,12 @@ def fetch_depth(session: requests.Session, *, asset: str) -> BookSnapshot:
         ValueError: If the request fails or exchange clocks disagree.
 
     """
-    response = session.get(
-        "https://api.bybit.com/v5/market/orderbook",
-        params={
-            "category": "linear",
-            "symbol": f"{asset}USDT",
-            "limit": DEPTH_LIMIT,
-        },
-        timeout=(3, 5),
-    )
+    url, params = koopec_calculus.market_request("book", asset)
+    response = session.get(url, params=params, timeout=(3, 5))
     response.raise_for_status()
     received = datetime.now(UTC)
-    body = json_object(response.text)
-    result = object_mapping(body.get("result"))
-    if integer(body["retCode"]) != 0:
-        msg = "Bybit depth request failed."
-        raise ValueError(msg)
-    observed = datetime.fromtimestamp(numeric_string(result["ts"]) / 1000, UTC)
+    exchange_ms = koopec_calculus.depth_time(response.text, asset)
+    observed = datetime.fromtimestamp(exchange_ms / 1_000, UTC)
     lead = observed - received
     if lead > MAXIMUM_CLOCK_LEAD:
         msg = (

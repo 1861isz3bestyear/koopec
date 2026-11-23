@@ -112,6 +112,7 @@ fn market_request(
         "24h" => Source::BitgetHourlyGrowth,
         "30d" => Source::BitgetDailyGrowth,
         "rate" => Source::BitgetLoanRate,
+        "book" => Source::BybitBook,
         "get_instruments" => Source::DeribitInstruments,
         "get_book_summary_by_currency" => Source::DeribitSummary,
         "get_index_price" => Source::DeribitIndex,
@@ -486,8 +487,176 @@ fn backup_archive(py: Python<'_>, source: PathBuf, destination: PathBuf) -> PyRe
         .map_err(|error| storage_error(py, error))
 }
 
+type MergeTimelines = Vec<(String, String, String, String, usize, usize)>;
+type DepthSide = Vec<(f64, f64)>;
+
+#[pyfunction(signature = (source, destination=None))]
+fn merge_archive(
+    py: Python<'_>,
+    source: PathBuf,
+    destination: Option<PathBuf>,
+) -> PyResult<(usize, usize, MergeTimelines)> {
+    let report = py
+        .detach(|| match destination {
+            Some(destination) => archive::storage::merge::merge(&source, &destination),
+            None => archive::storage::merge::check(&source),
+        })
+        .map_err(|error| storage_error(py, error))?;
+    Ok((
+        report.observations,
+        report.duplicates,
+        report
+            .timelines
+            .into_iter()
+            .map(|row| {
+                (
+                    row.asset,
+                    row.source.to_owned(),
+                    row.first,
+                    row.last,
+                    row.successful,
+                    row.missing,
+                )
+            })
+            .collect(),
+    ))
+}
+
+#[pyfunction]
+fn depth_time(payload: &str, asset: &str) -> PyResult<i64> {
+    market_data::depth_time(payload, asset).map_err(|_| {
+        PyValueError::new_err("Bybit depth request failed or returned an invalid timestamp")
+    })
+}
+
+#[pyfunction]
+fn parse_depth(
+    payload: &str,
+    asset: &str,
+    received_us: i64,
+) -> PyResult<(i64, DepthSide, DepthSide)> {
+    let book = market_data::depth(payload, asset, received_us).map_err(|_| {
+        PyValueError::new_err(
+            "Bybit depth request failed or returned invalid depth or availability",
+        )
+    })?;
+    let levels = |levels: Vec<calculus::indicators::BookLevel>| {
+        levels
+            .into_iter()
+            .map(|level| (level.price(), level.quantity()))
+            .collect()
+    };
+    Ok((book.observed_ms, levels(book.bids), levels(book.asks)))
+}
+
+#[pyfunction]
+fn depth_notional_rate(bids: DepthSide, asks: DepthSide) -> PyResult<f64> {
+    let levels = |rows: DepthSide| {
+        rows.into_iter()
+            .map(|(price, quantity)| calculus::indicators::BookLevel::new(price, quantity))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    levels(bids)
+        .and_then(|bids| {
+            levels(asks).and_then(|asks| calculus::indicators::book_rate(&bids, &asks))
+        })
+        .ok()
+        .flatten()
+        .ok_or_else(|| {
+            PyValueError::new_err("Recorded order-book notional must be finite and positive")
+        })
+}
+
+#[pyfunction]
+fn tunnel_state(lower: f64, upper: f64, flip: f64, tight_width: f64, forced: Option<u8>) -> u8 {
+    use calculus::plans::{PositiveTunnel, TunnelState};
+    let Ok(tunnel) = PositiveTunnel::new(lower, upper, flip) else {
+        return 0;
+    };
+    if let Some(state) = forced {
+        return state;
+    }
+    match tunnel.classify(tight_width) {
+        Ok(TunnelState::Tight) => 1,
+        Ok(TunnelState::FlipInside) => 2,
+        Ok(TunnelState::FlipBelow) => 3,
+        Err(_) => 0,
+    }
+}
+
+#[pyfunction]
+fn tunnel_direction(bounds: (f64, f64, f64), state: u8, price: f64, proximity: f64) -> i8 {
+    use calculus::plans::{PositiveTunnel, TunnelState};
+    let state = match state {
+        1 => TunnelState::Tight,
+        2 => TunnelState::FlipInside,
+        3 => TunnelState::FlipBelow,
+        _ => return 0,
+    };
+    PositiveTunnel::new(bounds.0, bounds.1, bounds.2)
+        .map_or(0, |tunnel| tunnel.direction(state, price, proximity))
+}
+
+#[pyfunction]
+fn tunnel_entry_allowed(
+    direction: i8,
+    counts: (usize, usize, usize),
+    oi_required: bool,
+    oi_direction: i8,
+) -> bool {
+    use calculus::{
+        accounts::Side,
+        strategy::{EntryGate, GateResult},
+    };
+    let side = |direction| match direction {
+        1 => Some(Side::Long),
+        -1 => Some(Side::Short),
+        _ => None,
+    };
+    let Some(direction) = side(direction) else {
+        return false;
+    };
+    let (required, agreeing, available) = counts;
+    let gate = EntryGate {
+        required,
+        agreeing,
+        enabled_sources: available,
+        gex_enabled: oi_required,
+        oi_enabled: oi_required,
+        fresh_oi_side: side(oi_direction),
+    };
+    gate.evaluate(direction) == GateResult::Allowed
+}
+
+#[pyfunction]
+fn market_due(
+    py: Python<'_>,
+    path: PathBuf,
+    key: (String, String),
+    now: String,
+    interval: i64,
+) -> PyResult<bool> {
+    py.detach(|| archive::storage::market_due(&path, &key.0, &key.1, &now, interval))
+        .map_err(|error| storage_error(py, error))
+}
+
+#[pyfunction]
+fn prune_unmanaged_archive(py: Python<'_>, path: PathBuf, cutoff: String) -> PyResult<bool> {
+    py.detach(|| archive::storage::prune_unmanaged(&path, &cutoff))
+        .map_err(|error| storage_error(py, error))
+}
+
 #[pymodule]
 fn koopec_calculus(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(market_due, module)?)?;
+    module.add_function(wrap_pyfunction!(prune_unmanaged_archive, module)?)?;
+    module.add_function(wrap_pyfunction!(tunnel_entry_allowed, module)?)?;
+    module.add_function(wrap_pyfunction!(merge_archive, module)?)?;
+    module.add_function(wrap_pyfunction!(depth_time, module)?)?;
+    module.add_function(wrap_pyfunction!(parse_depth, module)?)?;
+    module.add_function(wrap_pyfunction!(depth_notional_rate, module)?)?;
+    module.add_function(wrap_pyfunction!(tunnel_state, module)?)?;
+    module.add_function(wrap_pyfunction!(tunnel_direction, module)?)?;
     module.add_function(wrap_pyfunction!(bybit_interest_page, module)?)?;
     module.add_function(wrap_pyfunction!(oi_momentum, module)?)?;
     module.add_function(wrap_pyfunction!(daily_receipts, module)?)?;

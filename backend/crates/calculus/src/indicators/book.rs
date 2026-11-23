@@ -14,6 +14,14 @@ impl BookLevel {
         }
         Ok(Self { price, quantity })
     }
+
+    pub fn price(self) -> f64 {
+        self.price
+    }
+
+    pub fn quantity(self) -> f64 {
+        self.quantity
+    }
 }
 fn notional(levels: &[BookLevel]) -> Result<f64, IndicatorError> {
     levels.iter().try_fold(0.0, |sum, level| {

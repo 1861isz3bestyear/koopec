@@ -1,26 +1,24 @@
 # Copyright 2026 avwap-workspace-tests contributors
 """Merge checked overlapping archives without erasing history."""
 
-import fcntl
+from __future__ import annotations
+
 import hashlib
 import json
-import os
 import sqlite3
 import zlib
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 
+import koopec_calculus
 from market_storage.backup import validate
 from market_storage.models import Observation, Source, asset_value, aware
-from market_storage.schema import prepare
-from market_storage.writing import insert_observation
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -136,117 +134,41 @@ def records(path: Path) -> Iterator[tuple[Observation, datetime]]:
                 yield record, _collection_minute(row[7], record)
 
 
-def _append(
-    db: sqlite3.Connection, record: Observation, minute: datetime
-) -> bool:
-    key = (
-        record.asset,
-        record.source.value,
-        record.requested.isoformat(),
-        record.available.isoformat(),
-        record.error,
-    )
-    previous: list[tuple[str]] = db.execute(
-        "SELECT digest FROM tunnel_observations WHERE asset=? AND source=? "
-        "AND requested_at=? AND available_at=? AND error=?",
-        key,
-    ).fetchall()
-    digest = hashlib.sha256(record.payload.encode()).hexdigest()
-    if previous:
-        if previous != [(digest,)]:
-            msg = "Conflicting payloads for the same observation time."
-            raise ValueError(msg)
-        return False
-    insert_observation(db, record, mode="compact", collection_started=minute)
-    return True
+def _report(
+    result: tuple[int, int, list[tuple[str, str, str, str, int, int]]],
+) -> MergeReport:
+    """Adapt the native archive report to the CLI model.
 
+    Returns:
+        Totals and per-source coverage for the validated union.
 
-def _timelines(db: sqlite3.Connection) -> tuple[Timeline, ...]:
-    rows: list[tuple[str, str, str, str]] = db.execute(
-        "SELECT asset,source,requested_at,error FROM tunnel_observations "
-        "ORDER BY requested_at"
-    ).fetchall()
-    buckets: dict[tuple[str, Source], set[int]] = {}
-    bounds: dict[str, tuple[int, int]] = {}
-    for asset, name, stamp, error in rows:
-        source = Source(name)
-        second = int(datetime.fromisoformat(stamp).timestamp())
-        if not error:
-            buckets.setdefault((asset, source), set()).add(
-                second // source.interval
-            )
-        first, last = bounds.get(asset, (second, second))
-        bounds[asset] = (min(first, second), max(last, second))
-    return tuple(
-        Timeline(
-            asset=asset,
-            source=source,
-            first_requested_at=datetime.fromtimestamp(first, UTC).isoformat(),
-            last_requested_at=datetime.fromtimestamp(last, UTC).isoformat(),
-            successful_buckets=len(buckets.get((asset, source), set())),
-            missing_buckets=(
-                last // source.interval
-                - first // source.interval
-                + 1
-                - len(buckets.get((asset, source), set()))
-            ),
-        )
-        for asset, (first, last) in sorted(bounds.items())
-        for source in Source
-    )
-
-
-def _merge_rows(db: sqlite3.Connection, paths: tuple[Path, ...]) -> MergeReport:
-    count = duplicates = 0
-    for path in paths:
-        for record, minute in records(path):
-            if _append(db, record, minute):
-                count += 1
-            else:
-                duplicates += 1
+    """
+    observations, duplicates, timelines = result
     return MergeReport(
-        observations=count, duplicates=duplicates, timelines=_timelines(db)
+        observations=observations,
+        duplicates=duplicates,
+        timelines=tuple(
+            Timeline(
+                asset=asset,
+                source=Source(source),
+                first_requested_at=first,
+                last_requested_at=last,
+                successful_buckets=successful,
+                missing_buckets=missing,
+            )
+            for asset, source, first, last, successful, missing in timelines
+        ),
     )
-
-
-def _build(source: Path, destination: Path, staging: Path) -> MergeReport:
-    paths = (destination, source) if destination.exists() else (source,)
-    with closing(sqlite3.connect(staging)) as db:
-        prepare(db)
-        _ = db.execute(
-            "CREATE INDEX merge_identity ON tunnel_observations "
-            "(asset,source,requested_at,available_at,error)"
-        )
-        with db:
-            report = _merge_rows(db, paths)
-    validate(staging)
-    return report
 
 
 def merge(source: Path, destination: Path) -> MergeReport:
-    """Publish a checked union under a writer lock; failures preserve history.
+    """Publish a checked union under a writer lock.
 
     Returns:
-        Unique observation count, removed repeats and source gap counts.
+        Unique observation count, duplicates and per-source gaps.
 
     """
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with (
-        destination.with_suffix(destination.suffix + ".lock").open("a") as lock,
-        TemporaryDirectory(dir=destination.parent) as directory,
-    ):
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        staging = Path(directory) / "merged.sqlite"
-        report = _build(source, destination, staging)
-        with staging.open("rb") as completed:
-            os.fsync(completed.fileno())
-        _ = staging.replace(destination)
-        directory_fd = os.open(destination.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    return report
+    return _report(koopec_calculus.merge_archive(source, destination))
 
 
 def format_report(report: MergeReport) -> str:
@@ -288,9 +210,7 @@ def check(path: Path) -> MergeReport:
         The same validation report used before cumulative publication.
 
     """
-    with TemporaryDirectory(prefix="market-check-") as directory:
-        root = Path(directory)
-        return _build(path, root / "absent.sqlite", root / "checked.sqlite")
+    return _report(koopec_calculus.merge_archive(path))
 
 
 def _collection_minute(value: object, record: Observation) -> datetime:

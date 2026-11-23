@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from enum import IntEnum, StrEnum
 from typing import TYPE_CHECKING, Literal
 
+import koopec_calculus
 from snapshot_tunnel.option_levels import OptionLevelRange
 
 if TYPE_CHECKING:
@@ -176,28 +177,17 @@ class TunnelLevels:
             for value in (self.gex, self.lower, self.upper, self.flip)
         ):
             return TunnelState.INACTIVE
-        if self.gex == 0 or not (
-            0 < self.lower <= self.upper and self.flip > 0
-        ):
+        if self.gex == 0:
             return TunnelState.INACTIVE
-        return self._positive_state(settings)
-
-    def _positive_state(self, settings: TunnelSettings) -> TunnelState:
-        """Classify positive-GEX wall rejections above gamma flip.
-
-        Returns:
-            Tight lower-wall long, upper-wall short or both wall rejections.
-
-        """
-        if self.upper <= self.flip:
-            return TunnelState.INACTIVE
-        if settings.state_override is not None:
-            return settings.state_override
-        if self.upper / self.lower - 1 <= settings.tight_width:
-            return TunnelState.LONG
-        if self.lower <= self.flip:
-            return TunnelState.SHORT
-        return TunnelState.BOTH
+        return TunnelState(
+            koopec_calculus.tunnel_state(
+                self.lower,
+                self.upper,
+                self.flip,
+                settings.tight_width,
+                settings.state_override,
+            )
+        )
 
     def direction(self, price: float, settings: TunnelSettings) -> int:
         """Identify a nearby eligible positive-GEX wall.
@@ -209,15 +199,12 @@ class TunnelLevels:
         state = self.state(settings)
         if state in {TunnelState.INACTIVE, TunnelState.OSCILLATORS}:
             return 0
-        if price <= self.flip:
-            return 0
-        near_lower = abs(price / self.lower - 1) <= settings.proximity
-        near_upper = abs(price / self.upper - 1) <= settings.proximity
-        long = near_lower and state in {TunnelState.LONG, TunnelState.BOTH}
-        short = near_upper and state in {TunnelState.SHORT, TunnelState.BOTH}
-        if long == short:
-            return 0
-        return 1 if long else -1
+        return koopec_calculus.tunnel_direction(
+            (self.lower, self.upper, self.flip),
+            state,
+            price,
+            settings.proximity,
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
