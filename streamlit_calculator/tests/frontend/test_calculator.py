@@ -656,6 +656,9 @@ def test_archive_path_error_and_recovery(
     page = browser_page
     _ = page.goto(calculator_url + "/?archive=1")
     path = page.get_by_role("textbox", name="Local GEX archive path")
+    coverage = page.get_by_text("Archived BTC strategy window (UTC):")
+    expect(path).to_have_value(re.compile(r".*tunnel_inputs\.sqlite$"))
+    expect(coverage).to_be_visible()
     original = path.input_value()
     path.fill(original + ".missing")
     path.press("Enter")
@@ -665,9 +668,7 @@ def test_archive_path_error_and_recovery(
     expect(page.get_by_test_id("stException")).to_have_count(0)
     path.fill(original)
     path.press("Enter")
-    expect(
-        page.get_by_text("Archived BTC strategy window (UTC):", exact=False)
-    ).to_be_visible()
+    expect(coverage).to_be_visible()
     expect(
         page.get_by_text("Cannot read local archive", exact=False)
     ).to_have_count(0)

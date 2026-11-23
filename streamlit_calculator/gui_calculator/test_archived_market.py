@@ -251,8 +251,11 @@ def test_downloaded_vps_snapshot_drives_real_gex_calculation(
 ) -> None:
     """Execute remote backup and local transfer before calculating saved GEX."""
     root = archive.path.parent
-    storage = Path(__file__).resolve().parents[3] / "paper/server_bot/storage"
-    (root / "storage").symlink_to(storage, target_is_directory=True)
+    project = Path(__file__).resolve().parents[2]
+    (root / "storage").symlink_to(project, target_is_directory=True)
+    monkeypatch.setenv(
+        "PYTHONPATH", str(project / "streamlit_calculator" / "vendor")
+    )
     ssh = root / "ssh"
     _ = ssh.write_text(
         f"#!{sys.executable}\nimport os, sys\n"
