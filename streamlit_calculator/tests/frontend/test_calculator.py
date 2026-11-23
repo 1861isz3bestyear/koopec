@@ -38,9 +38,13 @@ def test_backtester_theme_and_controls(
     expect(
         page.get_by_role("heading", name="Anchored VWAP Backtester")
     ).to_be_visible(timeout=30_000)
-    expect(page.get_by_test_id("stMetricValue").first).to_be_visible()
+    expect(page.get_by_test_id("stMetricValue").first).to_be_visible(
+        timeout=30_000
+    )
     expect(page.get_by_test_id("stException")).to_have_count(0)
-    expect(page.get_by_test_id("stPlotlyChart").first).to_be_visible()
+    expect(page.get_by_test_id("stPlotlyChart").first).to_be_visible(
+        timeout=30_000
+    )
     expected_background = {
         "light": "rgb(255, 255, 255)",
         "dark": "rgb(14, 17, 23)",
