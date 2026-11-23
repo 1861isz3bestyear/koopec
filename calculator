@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+backtest="$root/../backtest"
+
+if [ ! -f "$backtest/pyproject.toml" ]; then
+    printf '%s\n' "The sibling backtest project was not found at $backtest." >&2
+    exit 1
+fi
+
+if curl --silent --fail --max-time 1 http://127.0.0.1:8000/v1/health >/dev/null; then
+    printf '%s\n' 'A Rust API is already listening on port 8000. Stop it before starting the calculator.' >&2
+    exit 1
+fi
+
+python_path=$(uv run --project "$backtest" python -c "import sys; print(sys.executable)")
+PYO3_PYTHON="$python_path" cargo build --manifest-path "$root/python/Cargo.toml" --release
+mkdir -p "$root/python/target/python"
+case "$(uname -s)" in
+    Darwin) library="$root/python/target/release/libkoopec_calculus.dylib" ;;
+    *) library="$root/python/target/release/libkoopec_calculus.so" ;;
+esac
+cp "$library" "$root/python/target/python/koopec_calculus.so"
+cargo build --manifest-path "$root/backend/Cargo.toml" -p http-api
+"$root/backend/target/debug/http-api" &
+api_pid=$!
+cleanup() {
+    kill "$api_pid" 2>/dev/null || :
+    wait "$api_pid" 2>/dev/null || :
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+attempt=0
+until curl --silent --fail --max-time 1 http://127.0.0.1:8000/v1/health >/dev/null; do
+    if ! kill -0 "$api_pid" 2>/dev/null || [ "$attempt" -ge 30 ]; then
+        printf '%s\n' 'The Rust API could not start on port 8000.' >&2
+        exit 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+done
+
+PYTHONPATH="$root/python/target/python:$root/streamlit_calculator:$backtest${PYTHONPATH:+:$PYTHONPATH}" \
+    KOOPEC_RUST_API=http://127.0.0.1:8000 \
+    uv run --project "$backtest" streamlit run "$root/streamlit_calculator/gui_calculator/main.py" "$@"

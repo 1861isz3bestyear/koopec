@@ -3,6 +3,7 @@
 mod error;
 mod exposure;
 mod flip;
+mod history;
 mod levels;
 mod max_pain;
 mod model;
@@ -10,6 +11,7 @@ mod model;
 pub use error::OptionsError;
 pub use exposure::{Exposure, exposure};
 pub use flip::{FlipResult, FlipSearchConfig, FlipStatus, search_flips};
+pub use history::{SavedSnapshot, SnapshotAsset, select_daily_snapshots, selected_snapshot_at};
 pub use levels::{
     ExposureSummary, ExposureTotals, RankedWalls, StrikeExposure, aggregate, ranked_walls,
 };

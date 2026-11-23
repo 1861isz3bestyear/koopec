@@ -1,0 +1,53 @@
+/* Scope the reference terminal's light palette to its own panels. */
+.st-key-gex-terminal-chart {
+    background: #fff;
+    color: #111827;
+    border: 1px solid #e2e2e8;
+    border-radius: 24px;
+    padding: 24px;
+    box-shadow: 0 8px 28px rgba(17, 24, 39, 0.04);
+}
+.st-key-gex-terminal-chart h3,
+.st-key-gex-terminal-chart [data-testid="stCaptionContainer"] {
+    color: #111827 !important;
+}
+.st-key-gex-terminal-levels [data-testid="stMetric"] {
+    background: #eefaf2;
+    border: 1px solid #c4ebd1;
+    border-radius: 16px;
+    padding: 22px 18px;
+    min-height: 130px;
+    color: #0b5428;
+    text-align: center;
+}
+.st-key-gex-terminal-levels [data-testid="stMetricLabel"] {
+    justify-content: center;
+    color: inherit !important;
+    letter-spacing: 0.04em;
+}
+.st-key-gex-terminal-levels [data-testid="stMetricValue"] {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-weight: 700;
+    color: inherit !important;
+}
+.st-key-gex-terminal-levels [data-testid="stHorizontalBlock"]:first-child
+[data-testid="stColumn"]:last-child [data-testid="stMetric"],
+.st-key-gex-terminal-levels [data-testid="stHorizontalBlock"]:nth-of-type(2)
+[data-testid="stColumn"]:first-child [data-testid="stMetric"] {
+    background: #f4efff;
+    border-color: #dfceff;
+    color: #5b168c;
+}
+.st-key-gex-terminal-levels [data-testid="stHorizontalBlock"]:nth-of-type(2)
+[data-testid="stColumn"]:last-child [data-testid="stMetric"] {
+    background: #fff1f3;
+    border-color: #ffd3dc;
+    color: #8f1230;
+}
+@media (max-width: 640px) {
+    .st-key-gex-terminal-chart { padding: 12px; }
+    .st-key-gex-terminal-levels [data-testid="stMetric"] {
+        padding: 16px 12px;
+        min-height: 100px;
+    }
+}

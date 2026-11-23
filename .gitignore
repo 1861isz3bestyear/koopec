@@ -5,3 +5,9 @@
 
 frontend/test-results/
 frontend/playwright-report/
+
+/python/target/
+/python/dist/
+
+/.test-venv/
+/streamlit_calculator/test-results/

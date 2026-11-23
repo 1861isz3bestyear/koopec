@@ -1,0 +1,39 @@
+<script>
+// Streamlit puts aria-expanded on its sidebar section. That ARIA attribute
+// belongs on the buttons which control expansion, not on a section landmark.
+(() => {
+  if (window.calculatorSidebarAccessibility) return;
+  function synchronizeSidebar() {
+    // Streamlit labels its upload wrapper but leaves the native input unnamed.
+    for (const uploader of document.querySelectorAll('[data-testid="stFileUploader"]')) {
+      const input = uploader.querySelector('input[type="file"]');
+      const label = uploader.querySelector('[data-testid="stWidgetLabel"]');
+      const name = label?.textContent?.trim();
+      if (input && name && input.getAttribute('aria-label') !== name)
+        input.setAttribute('aria-label', name);
+    }
+    const sidebar = document.querySelector('[data-testid="stSidebar"]');
+    if (!sidebar) return;
+    const expanded = sidebar.getAttribute('aria-expanded') ?? sidebar.dataset.expanded;
+    if (expanded === undefined) return;
+    sidebar.dataset.expanded = expanded;
+    sidebar.id ||= 'calculator-sidebar';
+    for (const button of document.querySelectorAll(
+      '[data-testid="stSidebarCollapseButton"] button, ' +
+      '[data-testid="stExpandSidebarButton"]'
+    )) {
+      if (button.getAttribute('aria-controls') !== sidebar.id)
+        button.setAttribute('aria-controls', sidebar.id);
+      if (button.getAttribute('aria-expanded') !== expanded)
+        button.setAttribute('aria-expanded', expanded);
+    }
+    if (sidebar.hasAttribute('aria-expanded')) sidebar.removeAttribute('aria-expanded');
+  }
+  window.calculatorSidebarAccessibility = new MutationObserver(synchronizeSidebar);
+  window.calculatorSidebarAccessibility.observe(document.body, {
+    subtree: true, childList: true, attributes: true,
+    attributeFilter: ['aria-expanded']
+  });
+  synchronizeSidebar();
+})();
+</script>

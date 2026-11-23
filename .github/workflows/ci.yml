@@ -59,3 +59,74 @@ jobs:
       - run: cargo test --workspace
       - run: cargo install cargo-llvm-cov --locked
       - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 95.01
+  python-extension:
+    name: Python extension (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install pytest
+      - run: PYO3_PYTHON="$(command -v python)" ./python/tests/run-native.sh
+  calculator:
+    name: Calculator Python and Chromium
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace/koopec
+      - name: Check dependency repository configuration
+        env:
+          BACKTEST_REPOSITORY: ${{ vars.BACKTEST_REPOSITORY }}
+          MARGIN_REPOSITORY: ${{ vars.MARGIN_OSCILLATOR_REPOSITORY }}
+        run: |
+          test -n "$BACKTEST_REPOSITORY" || { echo 'Set BACKTEST_REPOSITORY to owner/repository'; exit 1; }
+          test -n "$MARGIN_REPOSITORY" || { echo 'Set MARGIN_OSCILLATOR_REPOSITORY to owner/repository'; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.BACKTEST_REPOSITORY }}
+          ref: ${{ vars.BACKTEST_REF }}
+          token: ${{ secrets.KOOPEC_DEPENDENCIES_TOKEN || github.token }}
+          path: workspace/backtest
+      - uses: actions/checkout@v4
+        with:
+          repository: 1861isz3bestyear/paper_reference_bot
+          ref: ${{ vars.PAPER_REF }}
+          token: ${{ secrets.KOOPEC_DEPENDENCIES_TOKEN || github.token }}
+          path: workspace/paper/server_bot
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.MARGIN_OSCILLATOR_REPOSITORY }}
+          ref: ${{ vars.MARGIN_OSCILLATOR_REF }}
+          token: ${{ secrets.KOOPEC_DEPENDENCIES_TOKEN || github.token }}
+          path: workspace/margin_loan_oscillator
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked Python and Chromium dependencies
+        working-directory: workspace/koopec
+        run: |
+          export UV_PROJECT_ENVIRONMENT="$PWD/.test-venv"
+          uv sync --locked --project ../backtest
+          uv run --locked --project ../backtest playwright install --with-deps chromium
+      - name: Run Python and browser suite
+        working-directory: workspace/koopec
+        run: ./streamlit_calculator/test.sh
+      - name: Check Python formatting, lint and types
+        if: always()
+        working-directory: workspace/koopec/streamlit_calculator
+        run: |
+          ../.test-venv/bin/black --check --config ../../backtest/pyproject.toml . ../python/tests ../python/koopec_calculus.pyi
+          ../.test-venv/bin/ruff check --config ../../backtest/pyproject.toml . ../python/tests ../python/koopec_calculus.pyi
+          ../.test-venv/bin/basedpyright -p pyrightconfig.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calculator-browser-results
+          path: workspace/koopec/streamlit_calculator/test-results/
+          if-no-files-found: warn

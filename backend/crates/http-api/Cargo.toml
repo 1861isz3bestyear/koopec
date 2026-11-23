@@ -10,9 +10,15 @@ calculus = { path = "../calculus" }
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+flate2 = "1.1.11"
+sha2 = "0.11.1"
+chrono = "0.4.45"
+serde_json = "1"
 
 [dev-dependencies]
 serde_json = "1"
+tempfile = "3.27.0"
 tower = { version = "0.5", features = ["util"] }
 
 [lints]

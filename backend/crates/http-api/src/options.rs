@@ -1,33 +1,34 @@
 use crate::ErrorBody;
 use axum::{Json, http::StatusCode};
 use calculus::options::{
-    IdentifiedContract, OptionContract, OptionKind, OptionSnapshot, Valuation, aggregate,
+    IdentifiedContract, MaxPain, OptionContract, OptionKind, OptionSnapshot, Valuation, aggregate,
+    max_pain, ranked_walls,
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExposureRequest {
-    observed_at: i64,
-    available_at: i64,
-    valued_at: i64,
-    spot: f64,
-    contracts: Vec<Contract>,
+    pub(crate) observed_at: i64,
+    pub(crate) available_at: i64,
+    pub(crate) valued_at: i64,
+    pub(crate) spot: f64,
+    pub(crate) contracts: Vec<Contract>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Contract {
-    id: String,
-    kind: Kind,
-    strike: f64,
-    expiry: i64,
-    iv: f64,
-    open_interest: f64,
-    multiplier: f64,
+pub(crate) struct Contract {
+    pub(crate) id: String,
+    pub(crate) kind: Kind,
+    pub(crate) strike: f64,
+    pub(crate) expiry: i64,
+    pub(crate) iv: f64,
+    pub(crate) open_interest: f64,
+    pub(crate) multiplier: f64,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Kind {
+pub(crate) enum Kind {
     Call,
     Put,
 }
@@ -36,7 +37,23 @@ pub(crate) struct ExposureResponse {
     signed: f64,
     absolute: f64,
     strikes: Vec<Strike>,
+    walls: Walls,
+    max_pain: Pain,
 }
+#[derive(Serialize)]
+struct Walls {
+    calls: Vec<Strike>,
+    puts: Vec<Strike>,
+}
+#[derive(Serialize)]
+#[serde(tag = "status", content = "strike", rename_all = "snake_case")]
+enum Pain {
+    Strike(f64),
+    Empty,
+    MixedExpiry,
+    ZeroOpenInterest,
+}
+
 #[derive(Serialize)]
 struct Strike {
     strike: f64,
@@ -80,28 +97,42 @@ fn snapshot(request: ExposureRequest) -> Result<OptionSnapshot, calculus::option
 pub(crate) async fn calculate(
     Json(request): Json<ExposureRequest>,
 ) -> Result<Json<ExposureResponse>, (StatusCode, Json<ErrorBody>)> {
-    let summary = snapshot(request)
-        .and_then(|snapshot| aggregate(&snapshot))
-        .map_err(|_| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(ErrorBody {
-                    code: "invalid_options",
-                    message: "The options input cannot be calculated.",
-                }),
-            )
-        })?;
+    let spot = request.spot;
+    let valuation = Valuation::new(spot, request.valued_at).map_err(invalid_options)?;
+    let snapshot = snapshot(request)
+        .and_then(|snapshot| snapshot.revalue(valuation))
+        .map_err(invalid_options)?;
+    let summary = aggregate(&snapshot).map_err(invalid_options)?;
+    let ranked = ranked_walls(&summary, spot, Some(0.2)).map_err(invalid_options)?;
+    let max_pain = match max_pain(&snapshot).map_err(invalid_options)? {
+        MaxPain::Strike(strike) => Pain::Strike(strike),
+        MaxPain::Empty => Pain::Empty,
+        MaxPain::MixedExpiry => Pain::MixedExpiry,
+        MaxPain::ZeroOpenInterest => Pain::ZeroOpenInterest,
+    };
+    let convert = |s: calculus::options::StrikeExposure| Strike {
+        strike: s.strike,
+        call: s.call,
+        put: s.put,
+    };
     Ok(Json(ExposureResponse {
         signed: summary.totals.signed,
         absolute: summary.totals.absolute,
-        strikes: summary
-            .strikes
-            .into_iter()
-            .map(|s| Strike {
-                strike: s.strike,
-                call: s.call,
-                put: s.put,
-            })
-            .collect(),
+        strikes: summary.strikes.into_iter().map(convert).collect(),
+        walls: Walls {
+            calls: ranked.calls.into_iter().map(convert).collect(),
+            puts: ranked.puts.into_iter().map(convert).collect(),
+        },
+        max_pain,
     }))
+}
+
+fn invalid_options(_: calculus::options::OptionsError) -> (StatusCode, Json<ErrorBody>) {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(ErrorBody {
+            code: "invalid_options",
+            message: "The options input cannot be calculated.",
+        }),
+    )
 }
