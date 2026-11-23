@@ -16,12 +16,15 @@ The default archive is `../gex_downloads/tunnel_inputs.sqlite`, in the
 `gex_downloads` directory beside Koopec. Set `GUI_CALCULATOR_ARCHIVE` or
 enter a path in the UI to use a different archive.
 
-The release-mode PyO3 extension serves the archive collection index, strike
+The release-mode PyO3 extension serves the archive collection index, market
+receipt reads and writes, options snapshot and candle persistence, and strike
 exposure in profiles and snapshot history, ranked call and put walls, max pain,
-and public Bitget request construction, parsing, and hourly and daily momentum.
-Python provides Streamlit, HTTP transport and caching, archive payload loading,
-gamma-flip search, other oscillator and options calculations, strategy planning,
-and replay execution. Replay uses Rust for its displayed wall ranks.
+Deribit request construction and options-chain normalization, and public Bitget
+request construction, parsing, and hourly and daily momentum.
+The calculator and Rust archive reader share the Deribit normalizer. Python
+provides Streamlit, HTTP transport, snapshot serialization, archive
+maintenance and SSH transfer, gamma-flip search, other oscillator and options
+calculations, strategy planning, and replay execution. Replay uses Rust for its displayed wall ranks.
 
 ## Tests
 

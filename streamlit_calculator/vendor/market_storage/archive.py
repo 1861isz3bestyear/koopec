@@ -2,16 +2,15 @@
 """Commit exact inputs before exposing them to calculation consumers."""
 
 import sqlite3
-import zlib
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
+import koopec_calculus
 from market_storage.models import Observation, Source, Window, aware
 from market_storage.receipts import cleanup
 from market_storage.schema import prepare
-from market_storage.writing import insert_observation
 
 DUE_QUERIES = {
     "tunnel_inputs": (
@@ -21,21 +20,6 @@ DUE_QUERIES = {
     "tunnel_observations": (
         "SELECT 1 FROM tunnel_observations WHERE asset=? AND source=? "
         "AND error='' AND requested_at>=? AND available_at<=? LIMIT 1"
-    ),
-}
-READ_QUERIES = {
-    "tunnel_inputs": (
-        "SELECT source,requested_at,available_at,payload, "
-        "COALESCE(collection_id, 'legacy:raw:' || id) "
-        "FROM tunnel_inputs WHERE asset=? AND error='' AND available_at>=? "
-        "AND available_at<=? ORDER BY available_at,id"
-    ),
-    "tunnel_observations": (
-        "SELECT"
-        " o.source,o.requested_at,o.available_at,p.payload,o.collection_id FROM"
-        " tunnel_observations o JOIN tunnel_payloads p ON p.digest=o.digest"
-        " WHERE o.asset=? AND o.error='' AND o.available_at>=? AND"
-        " o.available_at<=? ORDER BY o.available_at,o.id"
     ),
 }
 DELETE_QUERIES = {
@@ -65,16 +49,20 @@ class Archive:
         """Durably commit one response before a consumer can load it."""
         if collection_started is not None:
             aware(collection_started)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path, timeout=30)) as db:
-            prepare(db)
-            with db:
-                insert_observation(
-                    db,
-                    observation,
-                    mode=self.mode,
-                    collection_started=collection_started,
-                )
+        koopec_calculus.save_market(
+            self.path,
+            (
+                observation.asset,
+                observation.source.value,
+                observation.requested.isoformat(),
+                observation.available.isoformat(),
+                observation.payload,
+                observation.collection,
+                observation.error,
+            ),
+            collection_started.isoformat() if collection_started else None,
+            self.mode == "compact",
+        )
 
     def load(
         self, window: Window, *, sources: frozenset[Source] | None = None
@@ -85,9 +73,25 @@ class Archive:
             Validated chronological observations, including revised responses.
 
         """
-        with closing(_read_connection(self.path)) as db:
-            rows = _read_rows(db, window, sources=sources)
-        return tuple(sorted(rows, key=lambda row: row.available))
+        rows = koopec_calculus.load_market(
+            self.path,
+            (window.asset, window.start.isoformat(), window.end.isoformat()),
+            [
+                source.value
+                for source in (Source if sources is None else sources)
+            ],
+        )
+        return tuple(
+            Observation(
+                asset=window.asset,
+                source=Source(source),
+                requested=datetime.fromisoformat(requested),
+                available=datetime.fromisoformat(available),
+                payload=payload,
+                collection=collection,
+            )
+            for source, requested, available, payload, collection in rows
+        )
 
     def due(self, asset: str, source: Source, *, now: datetime) -> bool:
         """Persist cadence across restarts and retry failures within a bucket.
@@ -164,60 +168,3 @@ def _tables(db: sqlite3.Connection) -> tuple[str, ...]:
         "AND name IN ('tunnel_inputs','tunnel_observations')"
     ).fetchall()
     return tuple(row[0] for row in rows)
-
-
-def _read_rows(
-    db: sqlite3.Connection, window: Window, *, sources: frozenset[Source] | None
-) -> list[Observation]:
-    observations: list[Observation] = []
-    allowed = {
-        source.value for source in (Source if sources is None else sources)
-    }
-    for table in _tables(db):
-        compact = table == "tunnel_observations"
-        rows: list[tuple[object, ...]] = db.execute(
-            READ_QUERIES[table],
-            (
-                window.asset,
-                window.start.astimezone(UTC).isoformat(),
-                window.end.astimezone(UTC).isoformat(),
-            ),
-        ).fetchall()
-        for row in rows:
-            # Legacy OHLCV and authenticated margin rows are never inputs.
-            if row[0] not in allowed:
-                continue
-            observations.append(_decode(row, window, compact=compact))
-    return observations
-
-
-def _decode(
-    row: tuple[object, ...], window: Window, *, compact: bool
-) -> Observation:
-    if len(row) != len(
-        ("source", "requested", "available", "body", "collection")
-    ):
-        msg = "Invalid archive observation metadata."
-        raise ValueError(msg)
-    source, requested, available, body, collection = row
-    if not isinstance(source, str) or not isinstance(requested, str):
-        msg = "Invalid source or request time."
-        raise TypeError(msg)
-    if not isinstance(available, str) or not isinstance(collection, str):
-        msg = "Invalid receipt time or collection identity."
-        raise TypeError(msg)
-    if compact and isinstance(body, bytes):
-        payload = zlib.decompress(body).decode("utf-8")
-    elif not compact and isinstance(body, str):
-        payload = body
-    else:
-        msg = "Invalid stored payload encoding."
-        raise TypeError(msg)
-    return Observation(
-        asset=window.asset,
-        source=Source(source),
-        requested=datetime.fromisoformat(requested),
-        available=datetime.fromisoformat(available),
-        payload=payload,
-        collection=collection,
-    )

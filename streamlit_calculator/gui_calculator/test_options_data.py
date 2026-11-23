@@ -387,27 +387,18 @@ def test_loading_history_closes_database(
 ) -> None:
     """Close history connections after successful reads and SQL failures."""
     path = tmp_path / "history.sqlite"
-    connection = sqlite3.connect(path)
-    try:
+    with closing(sqlite3.connect(path)) as connection, connection:
         if valid_schema:
             _ = connection.execute(
                 "CREATE TABLE options_snapshots (available_at TEXT, "
                 "asset TEXT, content TEXT)"
             )
-        expected = (
-            nullcontext()
-            if valid_schema
-            else pytest.raises(sqlite3.OperationalError, match="no such table")
-        )
-        with (
-            patch(
-                "gui_calculator.options_store.sqlite3.connect",
-                return_value=connection,
-            ),
-            expected,
-        ):
-            assert load_snapshots(path) == ()
-        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-            _ = connection.execute("SELECT 1")
-    finally:
-        connection.close()
+    expected = (
+        nullcontext()
+        if valid_schema
+        else pytest.raises(sqlite3.OperationalError, match="no such table")
+    )
+    with expected:
+        assert load_snapshots(path) == ()
+    with closing(sqlite3.connect(path, timeout=0)) as connection, connection:
+        _ = connection.execute("BEGIN EXCLUSIVE")

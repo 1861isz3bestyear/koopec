@@ -86,5 +86,21 @@ impl Archive {
     }
 }
 
+fn raw_collection(db: &Connection) -> Result<&'static str, rusqlite::Error> {
+    let has_identity: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tunnel_inputs') WHERE name='collection_id')",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(if has_identity {
+        "COALESCE(collection_id,'legacy:raw:' || id)"
+    } else {
+        "'legacy:raw:' || id"
+    })
+}
+
 /// Reader for existing local GEX option archives.
 pub mod local_archive;
+
+/// SQLite compatibility storage for calculator history and existing market downloads.
+pub mod storage;

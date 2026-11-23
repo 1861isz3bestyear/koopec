@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
 def strike_exposures(
     observed_at: int,
@@ -30,4 +31,42 @@ def ranked_walls(
 ) -> tuple[
     list[tuple[float, float, float]], list[tuple[float, float, float]]
 ]: ...
-def archive_index(path: Path) -> list[tuple[str, str, str]]: ...
+def archive_index(
+    path: Path, asset: str | None = None
+) -> list[tuple[str, str, str]]: ...
+def deribit_chain(
+    instruments: str, quotes: str, asset: str
+) -> list[
+    tuple[str, Literal["call", "put"], float, int, float, float, float]
+]: ...
+def deribit_spot(payload: str) -> float: ...
+def save_options(
+    path: Path, row: tuple[str, str, str, str, str, str | None]
+) -> None: ...
+def load_options(path: Path) -> list[tuple[str, str | None]]: ...
+def save_market(
+    path: Path,
+    row: tuple[str, str, str, str, str, str, str],
+    collection_start: str | None,
+    compact: bool,
+) -> None: ...
+def load_market(
+    path: Path, bounds: tuple[str, str, str], sources: Sequence[str]
+) -> list[tuple[str, str, str, str, str]]: ...
+
+type _CandleKey = tuple[str, str, str]
+type _CandleRow = tuple[int, float, float, float, float, float, float, int]
+
+def initialize_candles(path: Path) -> None: ...
+def upsert_candles(
+    path: Path, market: _CandleKey, rows: Sequence[_CandleRow]
+) -> None: ...
+def mark_candle_download(
+    path: Path, market: _CandleKey, bounds: tuple[int, int]
+) -> None: ...
+def missing_candle_ranges(
+    path: Path, market: _CandleKey, bounds: tuple[int, int]
+) -> list[tuple[int, int]]: ...
+def load_candles(
+    path: Path, market: _CandleKey, bounds: tuple[int, int]
+) -> list[_CandleRow]: ...

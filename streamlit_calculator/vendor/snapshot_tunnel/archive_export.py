@@ -5,12 +5,12 @@ import argparse
 import os
 import sqlite3
 import sys
-from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING
 
+import koopec_calculus
 from market_storage.archive import Archive
 from market_storage.inputs import GexInputs, load_inputs
 from market_storage.models import Window
@@ -23,29 +23,13 @@ from snapshot_tunnel.options_model import (
     positive_number,
 )
 from snapshot_tunnel.validation import (
-    database_rows,
     json_object,
     object_mapping,
-    string,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from io import Writer
-
-
-COLLECTION_QUERIES = {
-    "tunnel_inputs": (
-        "SELECT COALESCE(collection_id, 'legacy:raw:' || id) AS collection, "
-        "available_at, source FROM tunnel_inputs WHERE asset=? AND error='' "
-        "AND source IN ('instruments','options','spot')"
-    ),
-    "tunnel_observations": (
-        "SELECT collection_id AS collection, available_at, source "
-        "FROM tunnel_observations WHERE asset=? AND error='' "
-        "AND source IN ('instruments','options','spot')"
-    ),
-}
 
 
 def collection_windows(
@@ -58,41 +42,18 @@ def collection_windows(
 
     """
     selected = "BTC" if asset == "BTC" else "ETH"
-    with closing(
-        sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-    ) as db:
-        tables = database_rows(
-            db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        )
-        names = {string(row[0]) for row in tables}
-        queries = [
-            query for name, query in COLLECTION_QUERIES.items() if name in names
-        ]
-        if not queries:
-            return ()
-        query = " ".join((
-            "SELECT collection, MIN(available_at), MAX(available_at) FROM (",
-            " UNION ALL ".join(queries),
-            (
-                ") GROUP BY collection HAVING COUNT(DISTINCT source)=3 "
-                "ORDER BY MAX(available_at), collection"
-            ),
-        ))
-        rows = database_rows(
-            db.execute(query, [selected] * len(queries)).fetchall()
-        )
     return tuple(
         RecordedCollection(
-            identity=string(row[0]),
+            identity=identity,
             window=Window(
                 asset=selected,
-                start=datetime.fromisoformat(string(row[1])),
-                end=datetime.fromisoformat(string(row[2])),
+                start=datetime.fromisoformat(start),
+                end=datetime.fromisoformat(end),
             ),
         )
-        for row in rows
+        for identity, start, end in koopec_calculus.archive_index(
+            path, selected
+        )
     )
 
 

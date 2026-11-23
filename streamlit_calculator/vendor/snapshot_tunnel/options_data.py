@@ -3,27 +3,20 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import sleep
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
+import koopec_calculus
 import requests
 from snapshot_tunnel.options_depth import fetch_depth
-from snapshot_tunnel.options_model import Option, Snapshot, positive_number
+from snapshot_tunnel.options_model import Option, Snapshot
 from snapshot_tunnel.validation import (
-    boolean,
     integer,
     json_object,
-    number,
-    object_list,
-    object_mapping,
-    string,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
 
 API = "https://www.deribit.com/api/v2/public/"
 MAX_TIMESTAMP_MS = 253402300799000  # Last second of year 9999.
@@ -39,8 +32,8 @@ class ChainObservation:
 
 def _download(
     session: requests.Session,
-    method: str,
-    params: Mapping[str, str],
+    url: str,
+    params: list[tuple[str, str]],
     *,
     attempts_left: int = 2,
 ) -> requests.Response:
@@ -56,14 +49,12 @@ def _download(
 
     """
     try:
-        return session.get(API + method, params=params, timeout=(3, 5))
+        return session.get(url, params=params, timeout=(3, 5))
     except (requests.ConnectionError, requests.Timeout) as exc:
         if attempts_left <= 1 or isinstance(exc, requests.exceptions.SSLError):
             raise
         sleep(1)
-        return _download(
-            session, method, params, attempts_left=attempts_left - 1
-        )
+        return _download(session, url, params, attempts_left=attempts_left - 1)
     except requests.RequestException:
         raise
     except OSError as exc:
@@ -72,7 +63,7 @@ def _download(
 
 
 def _request(
-    session: requests.Session, method: str, params: Mapping[str, str]
+    session: requests.Session, method: str, asset: str
 ) -> dict[str, object]:
     """Fetch a public JSON-RPC result, rejecting exchange-level errors.
 
@@ -83,7 +74,8 @@ def _request(
         ValueError: If the exchange returns an error or no result.
 
     """
-    response = _download(session, method, params)
+    url, params = koopec_calculus.market_request(method, asset)
+    response = _download(session, url, params)
     response.raise_for_status()
     payload = json_object(response.text)
     if "error" in payload or "result" not in payload:
@@ -92,89 +84,32 @@ def _request(
     return payload
 
 
-def _indexed_rows(value: object) -> dict[str, dict[str, object]]:
-    """Index exchange rows while rejecting duplicate instruments.
-
-    Returns:
-        Rows indexed by instrument name.
-
-    Raises:
-        ValueError: If instrument names are duplicated.
-
-    """
-    result: dict[str, dict[str, object]] = {}
-    for item in object_list(value):
-        row = object_mapping(item)
-        name = string(row["instrument_name"])
-        if name in result:
-            msg = "Duplicate Deribit instrument."
-            raise ValueError(msg)
-        result[name] = row
-    return result
-
-
-def _option(instrument: dict[str, object], quote: dict[str, object]) -> Option:
-    """Normalize Deribit option OI in underlying units into contracts.
-
-    Returns:
-        A validated contract for the approximate USD Black-Scholes model.
-
-    Raises:
-        ValueError: If contract specifications are unsupported.
-
-    """
-    side = string(instrument["option_type"])
-    if side not in {"call", "put"} or string(instrument["kind"]) != "option":
-        msg = "Unsupported Deribit contract."
-        raise ValueError(msg)
-    expiry_ms = integer(instrument["expiration_timestamp"])
-    if not 0 < expiry_ms <= MAX_TIMESTAMP_MS:
-        msg = "Invalid Deribit expiration timestamp."
-        raise ValueError(msg)
-    multiplier = positive_number(str(number(instrument["contract_size"])))
-    return Option(
-        exchange="DERIBIT",
-        expiry=datetime.fromtimestamp(expiry_ms / 1000, UTC),
-        strike=positive_number(str(number(instrument["strike"]))),
-        side="call" if side == "call" else "put",
-        open_interest=positive_number(
-            str(number(quote["open_interest"])), allow_zero=True
-        )
-        / multiplier,
-        multiplier=multiplier,
-        iv=positive_number(str(number(quote["mark_iv"]))) / 100,
-    )
-
-
 def normalize_chain(
     instruments: object, quotes: object, *, asset: Literal["BTC", "ETH"]
 ) -> tuple[Option, ...]:
-    """Require every active selected contract to have a valid summary.
+    """Convert normalized Rust contracts to the calculator's snapshot model.
 
     Returns:
         Complete normalized chain, including zero-OI contracts.
 
-    Raises:
-        ValueError: If the chain is empty, incomplete or has foreign contracts.
-
     """
-    definitions = _indexed_rows(instruments)
-    summaries = _indexed_rows(quotes)
-    options: list[Option] = []
-    for name, instrument in definitions.items():
-        if not boolean(instrument["is_active"]):
-            continue
-        if string(instrument["base_currency"]) != asset:
-            msg = "Unexpected underlying currency."
-            raise ValueError(msg)
-        if name not in summaries:
-            msg = f"Incomplete Deribit chain: no quote for {name}."
-            raise ValueError(msg)
-        options.append(_option(instrument, summaries[name]))
-    if not options:
-        msg = "Deribit returned an empty active chain."
-        raise ValueError(msg)
-    return tuple(options)
+    contracts = koopec_calculus.deribit_chain(
+        json.dumps(instruments, allow_nan=False),
+        json.dumps(quotes, allow_nan=False),
+        asset,
+    )
+    return tuple(
+        Option(
+            exchange="DERIBIT",
+            expiry=datetime.fromtimestamp(expiry_ms / 1000, UTC),
+            strike=strike,
+            side=side,
+            open_interest=interest,
+            multiplier=multiplier,
+            iv=iv,
+        )
+        for _, side, strike, expiry_ms, iv, interest, multiplier in contracts
+    )
 
 
 def fetch_snapshot(
@@ -190,23 +125,9 @@ def fetch_snapshot(
 
     """
     started = datetime.now(UTC)
-    params = {"currency": asset, "kind": "option"}
-    instruments = _request(
-        session,
-        "get_instruments",
-        {
-            **params,
-            "expired": "false",
-        },
-    )
-    summary = _request(session, "get_book_summary_by_currency", params)
-    index = _request(
-        session,
-        "get_index_price",
-        {
-            "index_name": asset.lower() + "_usd",
-        },
-    )
+    instruments = _request(session, "get_instruments", asset)
+    summary = _request(session, "get_book_summary_by_currency", asset)
+    index = _request(session, "get_index_price", asset)
     received = datetime.now(UTC)
     server_us = integer(summary["usOut"])
     if not 0 <= server_us <= MAX_TIMESTAMP_MS * 1000:
@@ -228,9 +149,7 @@ def fetch_snapshot(
     if any(option.expiry <= received for option in options):
         msg = "Chain expired during collection; retry with a new chain."
         raise ValueError(msg)
-    spot = positive_number(
-        str(number(object_mapping(index["result"])["index_price"]))
-    )
+    spot = koopec_calculus.deribit_spot(json.dumps(index, allow_nan=False))
     return ChainObservation(
         snapshot=Snapshot(
             timestamp=received,

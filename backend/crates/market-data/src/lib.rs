@@ -1,13 +1,18 @@
 //! Exchange-specific public market-data requests and validated responses.
 //! Transport and receipt timestamps are supplied by the caller.
+pub mod deribit;
+
 use calculus::indicators::{BookLevel, GrowthObservation};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// Public exchange requests supported by the oscillator adapters.
+/// Public exchange requests supported by the market-data adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     BybitBook,
+    DeribitInstruments,
+    DeribitSummary,
+    DeribitIndex,
     BitgetHourlyGrowth,
     BitgetDailyGrowth,
     BitgetLoanRate,
@@ -31,6 +36,22 @@ pub fn request(source: Source, asset: &str) -> Result<Request, InvalidData> {
     }
     let symbol = format!("{asset}USDT");
     let request = match source {
+        Source::DeribitInstruments => Request {
+            url: "https://www.deribit.com/api/v2/public/get_instruments",
+            parameters: vec![
+                ("currency", asset.into()),
+                ("kind", "option".into()),
+                ("expired", "false".into()),
+            ],
+        },
+        Source::DeribitSummary => Request {
+            url: "https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
+            parameters: vec![("currency", asset.into()), ("kind", "option".into())],
+        },
+        Source::DeribitIndex => Request {
+            url: "https://www.deribit.com/api/v2/public/get_index_price",
+            parameters: vec![("index_name", format!("{}_usd", asset.to_ascii_lowercase()))],
+        },
         Source::BybitBook => Request {
             url: "https://api.bybit.com/v5/market/orderbook",
             parameters: vec![

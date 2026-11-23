@@ -1,9 +1,6 @@
 # Copyright 2026 anchored-vwam-backtest contributors
 """Compatibility exports from the canonical paper Snapshot tunnel package."""
 
-from snapshot_tunnel.archive_export import (
-    COLLECTION_QUERIES as COLLECTION_QUERIES,
-)
 from snapshot_tunnel.archive_export import Arguments as Arguments
 from snapshot_tunnel.archive_export import (
     archive_collections as archive_collections,

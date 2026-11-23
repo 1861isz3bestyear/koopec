@@ -1,4 +1,5 @@
 //! Read complete option collections from a local Python market-storage archive.
+use crate::raw_collection;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -27,6 +28,7 @@ pub enum Kind {
 }
 use chrono::{DateTime, Utc};
 use flate2::read::ZlibDecoder;
+use market_data::deribit;
 use rusqlite::{Connection, OpenFlags, params};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -77,22 +79,31 @@ fn tables(db: &Connection) -> Result<Vec<&'static str>, ArchiveError> {
             found.push(table);
         }
     }
-    if found.is_empty() {
-        return Err(ArchiveError::Invalid);
-    }
     Ok(found)
 }
-fn collections(db: &Connection, tables: &[&str]) -> Result<Vec<Collection>, ArchiveError> {
-    let queries: Vec<_> = tables.iter().map(|table| match *table {
-        "tunnel_inputs" => "SELECT COALESCE(collection_id,'legacy:raw:' || id) AS collection, available_at,source FROM tunnel_inputs WHERE asset='BTC' AND error='' AND source IN ('instruments','options','spot')",
-        _ => "SELECT collection_id AS collection, available_at,source FROM tunnel_observations WHERE asset='BTC' AND error='' AND source IN ('instruments','options','spot')",
-    }).collect();
+fn collections(
+    db: &Connection,
+    tables: &[&str],
+    asset: &str,
+) -> Result<Vec<Collection>, ArchiveError> {
+    if tables.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut queries = Vec::new();
+    for table in tables {
+        queries.push(if *table == "tunnel_inputs" {
+            let identity = raw_collection(db)?;
+            format!("SELECT {identity} AS collection, available_at,source FROM tunnel_inputs WHERE asset=?1 AND error='' AND source IN ('instruments','options','spot')")
+        } else {
+            "SELECT collection_id AS collection, available_at,source FROM tunnel_observations WHERE asset=?1 AND error='' AND source IN ('instruments','options','spot')".to_owned()
+        });
+    }
     let query = format!(
         "SELECT collection, MIN(available_at), MAX(available_at) FROM ({}) GROUP BY collection HAVING COUNT(DISTINCT source)=3 ORDER BY MAX(available_at),collection",
         queries.join(" UNION ALL ")
     );
     let mut statement = db.prepare(&query)?;
-    let mapped = statement.query_map([], |row| {
+    let mapped = statement.query_map([asset], |row| {
         Ok(Collection {
             id: row.get(0)?,
             first_available_at: row.get(1)?,
@@ -107,12 +118,20 @@ fn collections(db: &Connection, tables: &[&str]) -> Result<Vec<Collection>, Arch
         DateTime::parse_from_rfc3339(&item.available_at).map_err(|_| ArchiveError::Invalid)?;
         result.push(item);
     }
-    if result.is_empty() {
-        return Err(ArchiveError::Invalid);
-    }
     Ok(result)
 }
-fn compact_payload(bytes: Vec<u8>, digest: String, codec: String) -> Result<String, ArchiveError> {
+pub(crate) fn payload_digest(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|value| format!("{value:02x}"))
+        .collect()
+}
+
+pub(crate) fn compact_payload(
+    bytes: Vec<u8>,
+    digest: String,
+    codec: String,
+) -> Result<String, ArchiveError> {
     if codec != "zlib" {
         return Err(ArchiveError::Invalid);
     }
@@ -121,10 +140,7 @@ fn compact_payload(bytes: Vec<u8>, digest: String, codec: String) -> Result<Stri
         .take(64 * 1024 * 1024)
         .read_to_end(&mut decoded)
         .map_err(|_| ArchiveError::Invalid)?;
-    let actual = Sha256::digest(&decoded)
-        .iter()
-        .map(|value| format!("{value:02x}"))
-        .collect::<String>();
+    let actual = payload_digest(&decoded);
     if actual != digest {
         return Err(ArchiveError::Invalid);
     }
@@ -138,11 +154,14 @@ fn payloads(
     let mut values = HashMap::new();
     for table in tables {
         let query = if *table == "tunnel_inputs" {
-            "SELECT source,payload,NULL,NULL FROM tunnel_inputs WHERE asset='BTC' AND error='' AND source IN ('instruments','options','spot') AND COALESCE(collection_id,'legacy:raw:' || id)=?1"
+            let identity = raw_collection(db)?;
+            format!(
+                "SELECT source,payload,NULL,NULL FROM tunnel_inputs WHERE asset='BTC' AND error='' AND source IN ('instruments','options','spot') AND {identity}=?1"
+            )
         } else {
-            "SELECT o.source,p.payload,p.digest,p.codec FROM tunnel_observations o LEFT JOIN tunnel_payloads p ON p.digest=o.digest WHERE o.asset='BTC' AND o.error='' AND o.source IN ('instruments','options','spot') AND o.collection_id=?1"
+            "SELECT o.source,p.payload,p.digest,p.codec FROM tunnel_observations o LEFT JOIN tunnel_payloads p ON p.digest=o.digest WHERE o.asset='BTC' AND o.error='' AND o.source IN ('instruments','options','spot') AND o.collection_id=?1".to_owned()
         };
-        let mut statement = db.prepare(query)?;
+        let mut statement = db.prepare(&query)?;
         let mut rows = statement.query(params![id])?;
         while let Some(row) = rows.next()? {
             let source: String = row.get(0)?;
@@ -162,92 +181,36 @@ fn payloads(
     }
     Ok(values)
 }
-fn indexed(value: &Value) -> Result<HashMap<&str, &Value>, ArchiveError> {
-    let array = value
-        .get("result")
-        .and_then(Value::as_array)
-        .ok_or(ArchiveError::Invalid)?;
-    let mut result = HashMap::new();
-    for row in array {
-        let name = row
-            .get("instrument_name")
-            .and_then(Value::as_str)
-            .ok_or(ArchiveError::Invalid)?;
-        if result.insert(name, row).is_some() {
-            return Err(ArchiveError::Invalid);
-        }
-    }
-    Ok(result)
-}
-fn positive(row: &Value, key: &str, zero: bool) -> Result<f64, ArchiveError> {
-    let value = row
-        .get(key)
-        .and_then(Value::as_f64)
-        .ok_or(ArchiveError::Invalid)?;
-    if !value.is_finite() || value < 0.0 || (!zero && value == 0.0) {
-        return Err(ArchiveError::Invalid);
-    }
-    Ok(value)
-}
 fn parse_contracts(
     values: &HashMap<String, Value>,
     available_ms: i64,
 ) -> Result<Vec<Contract>, ArchiveError> {
-    let instruments = indexed(values.get("instruments").ok_or(ArchiveError::Invalid)?)?;
-    let quotes = indexed(values.get("options").ok_or(ArchiveError::Invalid)?)?;
+    let result = |source: &str| {
+        deribit::result(values.get(source).ok_or(ArchiveError::Invalid)?)
+            .map_err(|_| ArchiveError::Invalid)
+    };
+    let chain = deribit::normalize_chain(result("instruments")?, result("options")?, "BTC")
+        .map_err(|_| ArchiveError::Invalid)?;
     let mut contracts = Vec::new();
     let mut identities = HashSet::new();
-    for (name, row) in instruments {
-        if !row
-            .get("is_active")
-            .and_then(Value::as_bool)
-            .ok_or(ArchiveError::Invalid)?
-        {
-            continue;
-        }
-        if row.get("base_currency").and_then(Value::as_str) != Some("BTC")
-            || row.get("kind").and_then(Value::as_str) != Some("option")
-        {
-            return Err(ArchiveError::Invalid);
-        }
-        let kind = match row.get("option_type").and_then(Value::as_str) {
-            Some("call") => Kind::Call,
-            Some("put") => Kind::Put,
-            _ => return Err(ArchiveError::Invalid),
-        };
-        let expiry = row
-            .get("expiration_timestamp")
-            .and_then(Value::as_i64)
-            .ok_or(ArchiveError::Invalid)?;
-        if !(1..=253_402_300_799_000).contains(&expiry) {
-            return Err(ArchiveError::Invalid);
-        }
-        let quote = quotes.get(name).ok_or(ArchiveError::Invalid)?;
-        let multiplier = positive(row, "contract_size", false)?;
-        let strike = positive(row, "strike", false)?;
-        let oi = positive(quote, "open_interest", true)? / multiplier;
-        let iv = positive(quote, "mark_iv", false)? / 100.0;
-        if !oi.is_finite() || !iv.is_finite() || iv <= 0.0 {
-            return Err(ArchiveError::Invalid);
-        }
-        if expiry <= available_ms {
-            continue;
-        }
-        let side = row
-            .get("option_type")
-            .and_then(Value::as_str)
-            .ok_or(ArchiveError::Invalid)?;
-        if !identities.insert((expiry, strike.to_bits(), side)) {
+    for contract in chain
+        .into_iter()
+        .filter(|item| item.expiry_ms > available_ms)
+    {
+        if !identities.insert((contract.expiry_ms, contract.strike.to_bits(), contract.side)) {
             return Err(ArchiveError::Invalid);
         }
         contracts.push(Contract {
-            id: name.to_owned(),
-            kind,
-            strike,
-            expiry: expiry.div_euclid(1000),
-            iv,
-            open_interest: oi,
-            multiplier,
+            id: contract.instrument,
+            kind: match contract.side {
+                deribit::Side::Call => Kind::Call,
+                deribit::Side::Put => Kind::Put,
+            },
+            strike: contract.strike,
+            expiry: contract.expiry_ms.div_euclid(1000),
+            iv: contract.iv,
+            open_interest: contract.open_interest,
+            multiplier: contract.multiplier,
         });
     }
     if contracts.is_empty() || contracts.len() > 10_000 {
@@ -257,9 +220,21 @@ fn parse_contracts(
 }
 /// Read complete BTC collection bounds without opening their payloads.
 pub fn index(path: &Path) -> Result<Vec<Collection>, ArchiveError> {
+    let collections = market_index(path, "BTC")?;
+    if collections.is_empty() {
+        return Err(ArchiveError::Invalid);
+    }
+    Ok(collections)
+}
+
+/// Read collection bounds for a supported asset, allowing an empty result.
+pub fn market_index(path: &Path, asset: &str) -> Result<Vec<Collection>, ArchiveError> {
+    if !matches!(asset, "BTC" | "ETH") {
+        return Err(ArchiveError::Invalid);
+    }
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     db.execute_batch("BEGIN DEFERRED")?;
-    collections(&db, &tables(&db)?)
+    collections(&db, &tables(&db)?, asset)
 }
 
 /// Read the collection index and one complete selected chain. Input is never modified.
@@ -267,7 +242,7 @@ pub fn load(path: &Path, selection: Option<&str>) -> Result<LoadedArchive, Archi
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     db.execute_batch("BEGIN DEFERRED")?;
     let tables = tables(&db)?;
-    let collections = collections(&db, &tables)?;
+    let collections = collections(&db, &tables, "BTC")?;
     let selected = match selection {
         Some(id) => collections
             .iter()
@@ -284,14 +259,8 @@ pub fn load(path: &Path, selection: Option<&str>) -> Result<LoadedArchive, Archi
         .checked_add(i64::from(available.timestamp_subsec_nanos() != 0))
         .ok_or(ArchiveError::Invalid)?;
     let values = payloads(&db, &tables, &selected.id)?;
-    let spot = positive(
-        values
-            .get("spot")
-            .and_then(|value| value.get("result"))
-            .ok_or(ArchiveError::Invalid)?,
-        "index_price",
-        false,
-    )?;
+    let spot = deribit::spot(values.get("spot").ok_or(ArchiveError::Invalid)?)
+        .map_err(|_| ArchiveError::Invalid)?;
     let contracts = parse_contracts(&values, available_ms)?;
     let selected = selected.id.clone();
     Ok(LoadedArchive {

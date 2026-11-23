@@ -3,14 +3,12 @@
 
 from __future__ import annotations
 
-import sqlite3
-from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 
+import koopec_calculus
 import pandas as pd
-from shared.validation import database_rows, integer
 
 from gui_calculator.data_sources import CANDLE_COLUMNS, INTERVALS
 
@@ -50,40 +48,7 @@ class HistoricalCandleCache:
     def __init__(self, path: Path = DEFAULT_CANDLE_DB) -> None:
         """Create a candle cache backed by the SQLite database at ``path``."""
         self.path: Path = path
-        self._initialize()
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30)
-        _ = connection.execute("PRAGMA journal_mode=WAL")
-        _ = connection.execute("PRAGMA busy_timeout=30000")
-        return connection
-
-    def _initialize(self) -> None:
-        with closing(self._connect()) as connection, connection:
-            _ = connection.executescript("""
-                CREATE TABLE IF NOT EXISTS candles (
-                    exchange TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    interval TEXT NOT NULL,
-                    open_time_ms INTEGER NOT NULL,
-                    open REAL NOT NULL,
-                    high REAL NOT NULL,
-                    low REAL NOT NULL,
-                    close REAL NOT NULL,
-                    volume REAL NOT NULL,
-                    quote_asset_volume REAL NOT NULL,
-                    number_of_trades INTEGER NOT NULL,
-                    PRIMARY KEY (exchange, symbol, interval, open_time_ms)
-                );
-                CREATE TABLE IF NOT EXISTS downloaded_ranges (
-                    exchange TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    interval TEXT NOT NULL,
-                    start_ms INTEGER NOT NULL,
-                    end_ms INTEGER NOT NULL,
-                    PRIMARY KEY (exchange, symbol, interval, start_ms, end_ms)
-                );
-                """)
+        koopec_calculus.initialize_candles(path)
 
     def upsert(
         self,
@@ -98,9 +63,6 @@ class HistoricalCandleCache:
             return
         rows = [
             (
-                exchange,
-                symbol,
-                interval,
                 int(timestamp.timestamp() * 1000),
                 opening,
                 high,
@@ -132,19 +94,9 @@ class HistoricalCandleCache:
                 strict=False,
             )
         ]
-        with closing(self._connect()) as connection, connection:
-            _ = connection.executemany(
-                """
-                INSERT INTO candles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(exchange, symbol, interval, open_time_ms)
-                DO UPDATE SET
-                    open=excluded.open, high=excluded.high, low=excluded.low,
-                    close=excluded.close, volume=excluded.volume,
-                    quote_asset_volume=excluded.quote_asset_volume,
-                    number_of_trades=excluded.number_of_trades
-                """,
-                rows,
-            )
+        koopec_calculus.upsert_candles(
+            self.path, (exchange, symbol, interval), rows
+        )
 
     def mark_downloaded(
         self,
@@ -156,12 +108,9 @@ class HistoricalCandleCache:
         end_ms: int,
     ) -> None:
         """Record a successfully downloaded candle range."""
-        with closing(self._connect()) as connection, connection:
-            _ = connection.execute(
-                "INSERT OR IGNORE INTO downloaded_ranges VALUES (?, ?, ?,"
-                " ?, ?)",
-                (exchange, symbol, interval, start_ms, end_ms),
-            )
+        koopec_calculus.mark_candle_download(
+            self.path, (exchange, symbol, interval), (start_ms, end_ms)
+        )
 
     def missing_ranges(
         self,
@@ -178,33 +127,9 @@ class HistoricalCandleCache:
             Inclusive timestamp ranges that still need downloading.
 
         """
-        with closing(self._connect()) as connection, connection:
-            stored = database_rows(
-                cast(
-                    "object",
-                    connection.execute(
-                        """
-                SELECT start_ms, end_ms FROM downloaded_ranges
-                WHERE exchange=? AND symbol=? AND interval=?
-                  AND end_ms >= ? AND start_ms <= ?
-                ORDER BY start_ms
-                """,
-                        (exchange, symbol, interval, start_ms, end_ms),
-                    ).fetchall(),
-                )
-            )
-        cursor = start_ms
-        missing: list[tuple[int, int]] = []
-        for row in stored:
-            covered_start, covered_end = (integer(value) for value in row)
-            if covered_start > cursor:
-                missing.append((cursor, min(end_ms, covered_start - 1)))
-            cursor = max(cursor, covered_end + 1)
-            if cursor > end_ms:
-                break
-        if cursor <= end_ms:
-            missing.append((cursor, end_ms))
-        return missing
+        return koopec_calculus.missing_candle_ranges(
+            self.path, (exchange, symbol, interval), (start_ms, end_ms)
+        )
 
     def load(
         self,
@@ -221,23 +146,9 @@ class HistoricalCandleCache:
             A dataframe containing candles in the requested range.
 
         """
-        with closing(self._connect()) as connection, connection:
-            rows = database_rows(
-                cast(
-                    "object",
-                    connection.execute(
-                        """
-                SELECT open_time_ms, open, high, low, close, volume,
-                       quote_asset_volume, number_of_trades
-                FROM candles
-                WHERE exchange=? AND symbol=? AND interval=?
-                  AND open_time_ms >= ? AND open_time_ms <= ?
-                ORDER BY open_time_ms
-                """,
-                        (exchange, symbol, interval, start_ms, end_ms),
-                    ).fetchall(),
-                )
-            )
+        rows = koopec_calculus.load_candles(
+            self.path, (exchange, symbol, interval), (start_ms, end_ms)
+        )
         if not rows:
             return pd.DataFrame(columns=CANDLE_COLUMNS)
         frame = pd.DataFrame(
