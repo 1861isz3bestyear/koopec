@@ -21,7 +21,9 @@ online backups, audit, merge, ordinary retention, and options snapshot and
 candle persistence. Rust also handles Deribit requests and normalization,
 Bitget data, Bybit depth and OI parsing, strike exposure, wall ranks, max pain,
 book and OI oscillators, daily and active replay selection, positive-GEX wall
-decisions, and the confirmation gate.
+decisions, and the confirmation gate. It calculates archived GEX history from
+complete BTC collections at their actual receipt times, using bounded batches
+of chains and returning only the chart rows to Streamlit.
 
 Python still provides Streamlit, HTTP transport, candle feeds, CSV
 serialization, acknowledged-copy retention and SSH transport, gamma-flip

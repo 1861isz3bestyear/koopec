@@ -646,8 +646,43 @@ fn prune_unmanaged_archive(py: Python<'_>, path: PathBuf, cutoff: String) -> PyR
         .map_err(|error| storage_error(py, error))
 }
 
+type ArchiveGexRow = (i64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64);
+
+#[pyfunction]
+fn archive_gex_history(
+    py: Python<'_>,
+    path: PathBuf,
+    distance: Option<f64>,
+) -> PyResult<Vec<ArchiveGexRow>> {
+    let history = py
+        .detach(|| archive::local_archive::gex_history(&path, distance))
+        .map_err(|error| {
+            PyValueError::new_err(format!("Cannot calculate archived GEX history: {error:?}"))
+        })?;
+    let price = |value: Option<f64>| value.unwrap_or(f64::NAN);
+    Ok(history
+        .into_iter()
+        .map(|row| {
+            (
+                row.receipt_us,
+                row.spot,
+                row.net,
+                row.call,
+                row.put,
+                row.absolute,
+                price(row.flip),
+                price(row.calls[0]),
+                price(row.calls[1]),
+                price(row.puts[0]),
+                price(row.puts[1]),
+            )
+        })
+        .collect())
+}
+
 #[pymodule]
 fn koopec_calculus(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(archive_gex_history, module)?)?;
     module.add_function(wrap_pyfunction!(market_due, module)?)?;
     module.add_function(wrap_pyfunction!(prune_unmanaged_archive, module)?)?;
     module.add_function(wrap_pyfunction!(tunnel_entry_allowed, module)?)?;

@@ -8,12 +8,10 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import koopec_calculus
+import pandas as pd
 import streamlit as st
 from shared.option_levels import DEFAULT_LEVEL_RANGE, OptionLevelRange
-from snapshot_tunnel.archive_export import (
-    archive_collections,
-    archived_snapshot,
-)
 from snapshot_tunnel.local_archive import (
     load_archive_oscillators,
     load_archive_snapshot_at,
@@ -22,12 +20,10 @@ from snapshot_tunnel.local_archive import (
 )
 
 from gui_calculator.local_archive import inspect_archive
-from gui_calculator.observed_history import observation_history
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-    import pandas as pd
     from snapshot_tunnel.archive_model import LocalArchiveSource
     from snapshot_tunnel.archived_market import ArchivedOscillators
     from snapshot_tunnel.options_model import Snapshot
@@ -75,9 +71,7 @@ def archive_snapshot_at(
     return load_archive_snapshot_at(source, cutoff)
 
 
-@st.cache_data(
-    show_spinner="Calculating all recorded five-minute GEX observations"
-)
+@st.cache_data(show_spinner="Calculating archived GEX history")
 def archive_gex_history(
     source: LocalArchiveSource,
     *,
@@ -90,13 +84,27 @@ def archive_gex_history(
 
     """
     require_archive_version(source)
-    history = observation_history(
-        (
-            archived_snapshot(packet)
-            for packet in archive_collections(source.path, asset="BTC")
-        ),
-        level_range=level_range,
+    rows = koopec_calculus.archive_gex_history(
+        source.path, level_range.distance if level_range.enabled else None
     )
+    history = pd.DataFrame(
+        rows,
+        columns=[
+            "time",
+            "options_price",
+            "options_gex",
+            "options_call_gex",
+            "options_put_gex",
+            "options_absolute_gex",
+            "options_gamma_flip",
+            "options_call_1",
+            "options_call_2",
+            "options_put_1",
+            "options_put_2",
+        ],
+    )
+    history["time"] = pd.to_datetime(history["time"], unit="us", utc=True)
+    history["options_gex_time"] = history["time"]
     require_archive_version(source)
     return history
 

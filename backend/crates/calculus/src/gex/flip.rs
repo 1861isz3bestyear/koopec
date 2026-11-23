@@ -1,5 +1,5 @@
-use super::aggregate;
-use crate::options::{OptionSnapshot, OptionsError, Valuation};
+use super::exposure::GammaTerm;
+use crate::options::{OptionSnapshot, OptionsError};
 
 /// Immutable bounded grid and bisection settings.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,13 +67,32 @@ impl FlipResult {
         })
     }
 }
-fn value(snapshot: &OptionSnapshot, spot: f64) -> Result<f64, OptionsError> {
-    let mut copy = snapshot.clone();
-    copy.valuation = Valuation::new(spot, snapshot.valuation.time)?;
-    Ok(aggregate(&copy)?.totals.signed)
+struct Curve(Vec<GammaTerm>);
+
+impl Curve {
+    fn new(snapshot: &OptionSnapshot) -> Result<Self, OptionsError> {
+        let mut terms = Vec::with_capacity(snapshot.contracts.len());
+        for item in &snapshot.contracts {
+            if let Some(term) = GammaTerm::new(&item.contract, snapshot.valuation)? {
+                terms.push(term);
+            }
+        }
+        Ok(Self(terms))
+    }
+
+    fn value(&self, spot: f64) -> Result<f64, OptionsError> {
+        let log_spot = spot.ln();
+        let signed: f64 = self.0.iter().map(|term| term.amount(spot, log_spot)).sum();
+        if signed.is_finite() {
+            Ok(signed)
+        } else {
+            Err(OptionsError::Arithmetic)
+        }
+    }
 }
+
 fn refine(
-    snapshot: &OptionSnapshot,
+    curve: &Curve,
     mut left: f64,
     mut right: f64,
     mut low: f64,
@@ -87,7 +106,7 @@ fn refine(
         if middle == left || middle == right {
             return Ok(None);
         }
-        let current = value(snapshot, middle)?;
+        let current = curve.value(middle)?;
         if current == 0.0 {
             return Ok(Some(middle));
         }
@@ -109,6 +128,7 @@ pub fn search_flips(
     snapshot: &OptionSnapshot,
     config: FlipSearchConfig,
 ) -> Result<FlipResult, OptionsError> {
+    let curve = Curve::new(snapshot)?;
     let mut roots = Vec::new();
     let mut previous: Option<(f64, f64)> = None;
     let mut zero = false;
@@ -122,7 +142,7 @@ pub fn search_flips(
             break;
         }
         last_price = price;
-        let current = value(snapshot, price)?;
+        let current = curve.value(price)?;
         if current == 0.0 {
             zero = true;
             continue;
@@ -130,7 +150,7 @@ pub fn search_flips(
         if let Some((left, low)) = previous
             && low.is_sign_positive() != current.is_sign_positive()
         {
-            match refine(snapshot, left, price, low, config)? {
+            match refine(&curve, left, price, low, config)? {
                 Some(root) => roots.push(root),
                 None => {
                     status = FlipStatus::Nonconverged;
@@ -155,4 +175,74 @@ pub fn search_flips(
         roots,
         spot: snapshot.valuation.spot,
     })
+}
+
+/// Reproduce the observed-history search grid, including every observed strike.
+pub fn observed_flip(snapshot: &OptionSnapshot) -> Result<Option<f64>, OptionsError> {
+    let spot = snapshot.valuation.spot;
+    let mut prices = Vec::with_capacity(snapshot.contracts.len() + 401);
+    prices.extend(snapshot.contracts.iter().map(|item| item.contract.strike));
+    prices.sort_unstable_by(f64::total_cmp);
+    let lower = prices.first().map_or(spot, |price| spot.min(*price));
+    let upper = prices.last().map_or(spot, |price| spot.max(*price));
+    if lower == upper {
+        return Ok(None);
+    }
+    let config = FlipSearchConfig::new(lower, upper, 400, upper * 1e-12, 64)?;
+    prices.extend(
+        (0..=config.intervals)
+            .map(|index| lower + (upper - lower) * index as f64 / config.intervals as f64),
+    );
+    prices.sort_unstable_by(f64::total_cmp);
+    prices.dedup();
+
+    let curve = Curve::new(snapshot)?;
+    let mut previous: Option<(f64, f64)> = None;
+    let mut nearest: Option<f64> = None;
+    for price in prices {
+        let value = curve.value(price)?;
+        if value == 0.0 {
+            continue;
+        }
+        if let Some((left, low)) = previous
+            && low.is_sign_positive() != value.is_sign_positive()
+            && let Some(root) = refine(&curve, left, price, low, config)?
+            && nearest.is_none_or(|nearest| (root - spot).abs() < (nearest - spot).abs())
+        {
+            nearest = Some(root);
+        }
+        previous = Some((price, value));
+    }
+    Ok(nearest)
+}
+
+#[cfg(test)]
+mod observed_tests {
+    use super::*;
+    use crate::options::{IdentifiedContract, OptionContract, OptionKind, Valuation};
+
+    #[test]
+    fn observed_grid_finds_the_crossing_between_distinct_strikes() {
+        let expiry = 31_536_000;
+        let iv = 0.25;
+        let contract = |name: &str, kind, strike| {
+            IdentifiedContract::new(
+                name.into(),
+                OptionContract::new(kind, strike, expiry, iv, 1.0, 1.0).unwrap(),
+            )
+            .unwrap()
+        };
+        let snapshot = OptionSnapshot::new(
+            0,
+            0,
+            Valuation::new(100.0, 0).unwrap(),
+            vec![
+                contract("call", OptionKind::Call, 90.0),
+                contract("put", OptionKind::Put, 110.0),
+            ],
+        )
+        .unwrap();
+        let expected = (90.0_f64 * 110.0).sqrt() * (-iv * iv / 2.0).exp();
+        assert!((observed_flip(&snapshot).unwrap().unwrap() - expected).abs() < 1e-8);
+    }
 }

@@ -115,3 +115,18 @@ def market_due(
     path: Path, key: tuple[str, str], now: str, interval: int
 ) -> bool: ...
 def prune_unmanaged_archive(path: Path, cutoff: str) -> bool: ...
+def archive_gex_history(path: Path, distance: float | None) -> list[
+    tuple[
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+    ]
+]: ...

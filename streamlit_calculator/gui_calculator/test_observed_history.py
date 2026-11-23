@@ -8,6 +8,10 @@ from typing import TYPE_CHECKING
 import pandas as pd
 import pytest
 from market_storage.archive import Archive
+from snapshot_tunnel.archive_export import (
+    archive_collections,
+    archived_snapshot,
+)
 from snapshot_tunnel.local_archive import (
     load_archive_snapshot_at,
     load_archive_snapshots,
@@ -50,6 +54,18 @@ def test_archive_keeps_all_five_minute_collections(tmp_path: Path) -> None:
     assert history["options_gex"].nunique() == OBSERVATION_COUNT
     assert history["time"].diff().dropna().eq(timedelta(minutes=5)).all()
     assert history["time"].iloc[0] == first.timestamp + timedelta(seconds=2)
+    expected = observation_history(
+        archived_snapshot(packet)
+        for packet in archive_collections(archive.path, asset="BTC")
+    )
+    pd.testing.assert_frame_equal(
+        history[expected.columns],
+        expected,
+        check_dtype=False,
+        check_exact=False,
+        rtol=1e-9,
+        atol=1e-8,
+    )
     assert load_archive_snapshot_at(source, first.timestamp) is None
     profile = load_archive_snapshot_at(
         source, first.timestamp + timedelta(minutes=5)

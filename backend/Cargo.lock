@@ -21,6 +21,7 @@ dependencies = [
 name = "archive"
 version = "0.1.0"
 dependencies = [
+ "calculus",
  "chrono",
  "flate2",
  "market-data",

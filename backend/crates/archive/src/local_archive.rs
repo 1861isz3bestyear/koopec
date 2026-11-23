@@ -149,20 +149,24 @@ pub(crate) fn compact_payload(
 fn payloads(
     db: &Connection,
     tables: &[&str],
-    id: &str,
+    collection: &Collection,
 ) -> Result<HashMap<String, Value>, ArchiveError> {
     let mut values = HashMap::new();
     for table in tables {
         let query = if *table == "tunnel_inputs" {
             let identity = raw_collection(db)?;
             format!(
-                "SELECT source,payload,NULL,NULL FROM tunnel_inputs WHERE asset='BTC' AND error='' AND source IN ('instruments','options','spot') AND {identity}=?1"
+                "SELECT source,payload,NULL,NULL FROM tunnel_inputs WHERE asset='BTC' AND error='' AND source IN ('instruments','options','spot') AND {identity}=?1 AND available_at>=?2 AND available_at<=?3"
             )
         } else {
-            "SELECT o.source,p.payload,p.digest,p.codec FROM tunnel_observations o LEFT JOIN tunnel_payloads p ON p.digest=o.digest WHERE o.asset='BTC' AND o.error='' AND o.source IN ('instruments','options','spot') AND o.collection_id=?1".to_owned()
+            "SELECT o.source,p.payload,p.digest,p.codec FROM tunnel_observations o LEFT JOIN tunnel_payloads p ON p.digest=o.digest WHERE o.asset='BTC' AND o.error='' AND o.source IN ('instruments','options','spot') AND o.collection_id=?1 AND o.available_at>=?2 AND o.available_at<=?3".to_owned()
         };
-        let mut statement = db.prepare(&query)?;
-        let mut rows = statement.query(params![id])?;
+        let mut statement = db.prepare_cached(&query)?;
+        let mut rows = statement.query(params![
+            collection.id,
+            collection.first_available_at,
+            collection.available_at
+        ])?;
         while let Some(row) = rows.next()? {
             let source: String = row.get(0)?;
             let text = if *table == "tunnel_inputs" {
@@ -181,16 +185,25 @@ fn payloads(
     }
     Ok(values)
 }
-fn parse_contracts(
+fn normalized_chain(
     values: &HashMap<String, Value>,
-    available_ms: i64,
-) -> Result<Vec<Contract>, ArchiveError> {
+) -> Result<Vec<deribit::Contract>, ArchiveError> {
     let result = |source: &str| {
         deribit::result(values.get(source).ok_or(ArchiveError::Invalid)?)
             .map_err(|_| ArchiveError::Invalid)
     };
-    let chain = deribit::normalize_chain(result("instruments")?, result("options")?, "BTC")
-        .map_err(|_| ArchiveError::Invalid)?;
+    deribit::normalize_chain(result("instruments")?, result("options")?, "BTC")
+        .map_err(|_| ArchiveError::Invalid)
+}
+
+mod history;
+pub use history::{GexHistoryRow, gex_history};
+
+fn parse_contracts(
+    values: &HashMap<String, Value>,
+    available_ms: i64,
+) -> Result<Vec<Contract>, ArchiveError> {
+    let chain = normalized_chain(values)?;
     let mut contracts = Vec::new();
     let mut identities = HashSet::new();
     for contract in chain
@@ -258,7 +271,7 @@ pub fn load(path: &Path, selection: Option<&str>) -> Result<LoadedArchive, Archi
         .timestamp()
         .checked_add(i64::from(available.timestamp_subsec_nanos() != 0))
         .ok_or(ArchiveError::Invalid)?;
-    let values = payloads(&db, &tables, &selected.id)?;
+    let values = payloads(&db, &tables, selected)?;
     let spot = deribit::spot(values.get("spot").ok_or(ArchiveError::Invalid)?)
         .map_err(|_| ArchiveError::Invalid)?;
     let contracts = parse_contracts(&values, available_ms)?;

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+calculus = { path = "../calculus" }
 market-data = { path = "../market-data" }
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 

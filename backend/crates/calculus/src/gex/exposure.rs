@@ -9,30 +9,59 @@ pub enum Exposure {
     Live(f64),
 }
 
+/// Price-independent inputs for repeated repricing of a single contract.
+pub(super) struct GammaTerm {
+    log_strike: f64,
+    volatility: f64,
+    interest: f64,
+    multiplier: f64,
+}
+
+impl GammaTerm {
+    pub(super) fn new(
+        contract: &OptionContract,
+        valuation: Valuation,
+    ) -> Result<Option<Self>, OptionsError> {
+        if contract.expiry <= valuation.time {
+            return Ok(None);
+        }
+        let elapsed = i128::from(contract.expiry) - i128::from(valuation.time);
+        let years = elapsed as f64 / (365.0 * 86_400.0 * valuation.units_per_second);
+        let volatility = contract.iv * years.sqrt();
+        if !volatility.is_finite() || volatility == 0.0 {
+            return Err(OptionsError::Arithmetic);
+        }
+        Ok(Some(Self {
+            log_strike: contract.strike.ln(),
+            volatility,
+            interest: match contract.kind {
+                OptionKind::Call => contract.open_interest,
+                OptionKind::Put => -contract.open_interest,
+            },
+            multiplier: contract.multiplier,
+        }))
+    }
+
+    pub(super) fn amount(&self, spot: f64, log_spot: f64) -> f64 {
+        let d1 = (log_spot - self.log_strike) / self.volatility + self.volatility / 2.0;
+        (-d1 * d1 / 2.0).exp() / self.volatility / (2.0 * std::f64::consts::PI).sqrt()
+            * self.interest
+            * self.multiplier
+            * spot
+            * 0.01
+    }
+}
+
 /// Calculate zero-rate Black–Scholes gamma exposure.
 pub fn exposure(contract: &OptionContract, valuation: Valuation) -> Result<Exposure, OptionsError> {
-    if contract.expiry <= valuation.time {
+    let Some(term) = GammaTerm::new(contract, valuation)? else {
         return Ok(Exposure::Expired);
-    }
-    let seconds = i128::from(contract.expiry) - i128::from(valuation.time);
-    let years = seconds as f64 / (365.0 * 86_400.0);
-    let volatility = contract.iv * years.sqrt();
-    if !volatility.is_finite() || volatility == 0.0 {
-        return Err(OptionsError::Arithmetic);
-    }
-    let d1 = (valuation.spot.ln() - contract.strike.ln()) / volatility + volatility / 2.0;
-    let amount = (-d1 * d1 / 2.0).exp() / volatility / (2.0 * std::f64::consts::PI).sqrt()
-        * contract.open_interest
-        * contract.multiplier
-        * valuation.spot
-        * 0.01;
+    };
+    let amount = term.amount(valuation.spot, valuation.spot.ln());
     if !amount.is_finite() {
         return Err(OptionsError::Arithmetic);
     }
-    Ok(Exposure::Live(match contract.kind {
-        OptionKind::Call => amount,
-        OptionKind::Put => -amount,
-    }))
+    Ok(Exposure::Live(amount))
 }
 
 #[cfg(test)]

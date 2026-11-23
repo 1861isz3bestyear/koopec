@@ -19,7 +19,7 @@ pub struct OptionContract {
 }
 
 impl OptionContract {
-    /// Construct a contract with IV as a fraction and expiry in Unix seconds.
+    /// Construct a contract with IV as a fraction and expiry in the valuation clock units.
     pub fn new(
         kind: OptionKind,
         strike: f64,
@@ -52,6 +52,7 @@ impl OptionContract {
 pub struct Valuation {
     pub(crate) spot: f64,
     pub(crate) time: i64,
+    pub(crate) units_per_second: f64,
 }
 
 impl Valuation {
@@ -60,7 +61,19 @@ impl Valuation {
         if !spot.is_finite() || spot <= 0.0 {
             return Err(OptionsError::InvalidInput);
         }
-        Ok(Self { spot, time })
+        Ok(Self {
+            spot,
+            time,
+            units_per_second: 1.0,
+        })
+    }
+
+    /// Value contracts whose expiry and receipt times are in Unix microseconds.
+    pub fn with_microseconds(spot: f64, time: i64) -> Result<Self, OptionsError> {
+        Ok(Self {
+            units_per_second: 1_000_000.0,
+            ..Self::new(spot, time)?
+        })
     }
 }
 
