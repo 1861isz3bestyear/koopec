@@ -37,14 +37,14 @@ def default_archive_path() -> Path:
     """Locate the consolidated download, independently of shell directory.
 
     Returns:
-        Configured archive path or Koopec's gex_downloads snapshot.
+        Configured archive path or the gex_downloads snapshot beside Koopec.
 
     """
     return Path(
         os.environ.get(
             "GUI_CALCULATOR_ARCHIVE",
             str(
-                Path(__file__).resolve().parents[2]
+                Path(__file__).resolve().parents[3]
                 / "gex_downloads/tunnel_inputs.sqlite"
             ),
         )

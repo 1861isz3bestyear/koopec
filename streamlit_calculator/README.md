@@ -12,9 +12,9 @@ Stop with Ctrl+C. The launcher passes arguments to Streamlit, for example
 from the reference projects under [vendor](vendor/README.md) and resolves
 third-party packages using its own lockfile.
 
-Provide an archive at `gex_downloads/tunnel_inputs.sqlite` inside Koopec, set
-`GUI_CALCULATOR_ARCHIVE` to an existing archive, or choose the file path in
-the UI. The archive is external input data.
+The default archive is `../gex_downloads/tunnel_inputs.sqlite`, in the
+`gex_downloads` directory beside Koopec. Set `GUI_CALCULATOR_ARCHIVE` or
+enter a path in the UI to use a different archive.
 
 The release-mode PyO3 extension serves the archive collection index, strike
 exposure in profiles and snapshot history, ranked call and put walls, max pain,
