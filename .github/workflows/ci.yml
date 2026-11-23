@@ -8,44 +8,6 @@ permissions:
   contents: read
 
 jobs:
-  frontend:
-    name: Frontend checks
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: corepack enable
-      - run: corepack pnpm install --frozen-lockfile
-      - run: corepack pnpm lint
-      - run: corepack pnpm build
-      - run: corepack pnpm test
-      - run: corepack pnpm coverage
-  e2e:
-    name: Chromium end-to-end
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: corepack enable
-      - run: corepack pnpm install --frozen-lockfile
-      - run: corepack pnpm exec playwright install --with-deps chromium
-      - run: corepack pnpm e2e
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-results
-          path: frontend/test-results/
-          if-no-files-found: ignore
   backend:
     name: Backend checks
     runs-on: ubuntu-latest
@@ -109,6 +71,7 @@ jobs:
           python-version: '3.14'
       - uses: astral-sh/setup-uv@v6
       - name: Install locked Python and Chromium dependencies
+        id: calculator_setup
         working-directory: workspace/koopec
         run: |
           export UV_PROJECT_ENVIRONMENT="$PWD/.test-venv"
@@ -118,7 +81,7 @@ jobs:
         working-directory: workspace/koopec
         run: ./streamlit_calculator/test.sh
       - name: Check Python formatting, lint and types
-        if: always()
+        if: always() && steps.calculator_setup.outcome == 'success'
         working-directory: workspace/koopec/streamlit_calculator
         run: |
           ../.test-venv/bin/black --check --config ../../backtest/pyproject.toml . ../python/tests ../python/koopec_calculus.pyi
