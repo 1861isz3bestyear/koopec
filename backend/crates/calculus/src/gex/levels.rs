@@ -1,4 +1,5 @@
-use super::{Exposure, OptionKind, OptionSnapshot, OptionsError, exposure};
+use super::{Exposure, exposure};
+use crate::options::{OptionKind, OptionSnapshot, OptionsError};
 
 /// Side contributions for a single strike, in USD per 1% move.
 #[derive(Debug, Clone, Copy, PartialEq)]

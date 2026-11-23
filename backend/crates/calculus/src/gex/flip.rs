@@ -1,4 +1,5 @@
-use super::{OptionSnapshot, OptionsError, Valuation, aggregate};
+use super::aggregate;
+use crate::options::{OptionSnapshot, OptionsError, Valuation};
 
 /// Immutable bounded grid and bisection settings.
 #[derive(Debug, Clone, Copy, PartialEq)]
