@@ -11,3 +11,6 @@ profiles, wall ranks, max pain, Deribit requests and chain normalization, and
 public Bitget lending data and momentum. The local Python dependencies under
 `streamlit_calculator/vendor/` still provide archive maintenance and SSH
 transfer, other analytics, and strategy replay.
+
+See the [full-stack Rust migration book](docs/migration/src/SUMMARY.md) for
+the Axum, Dioxus, and Plychart migration plan.

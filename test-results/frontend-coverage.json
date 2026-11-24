@@ -1,0 +1,9 @@
+{
+  "source": "gui_calculator/oscillator_dashboard/chart.js",
+  "metric": "V8 executed character ranges (not Python or branch coverage)",
+  "covered": 10744,
+  "total": 10892,
+  "percentage": 98.64120455380096,
+  "minimum": 92,
+  "samples": 12
+}

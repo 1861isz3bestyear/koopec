@@ -4,7 +4,7 @@
 import runpy
 from dataclasses import replace
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -21,9 +21,6 @@ from gui_calculator.settings import CalculatorSettings
 from gui_calculator.tunnel_backtest import simulate_tunnel
 from tests.frontend.archive_fixture import write_archive
 from tests.support import call_args, mock_child
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.fixture
@@ -234,7 +231,7 @@ def test_streamlit_script_invokes_only_local_application() -> None:
     """The script entrypoint exposes no legacy strategy compatibility API."""
     with patch("gui_calculator.app.main") as main:
         namespace = runpy.run_path(
-            "gui_calculator/main.py", run_name="__main__"
+            str(Path(__file__).with_name("main.py")), run_name="__main__"
         )
     main.assert_called_once_with()
     assert "backtest" not in namespace
