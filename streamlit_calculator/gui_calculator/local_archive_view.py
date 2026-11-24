@@ -16,7 +16,6 @@ from snapshot_tunnel.local_archive import (
     load_archive_oscillators,
     load_archive_snapshot_at,
     load_archive_snapshots,
-    require_archive_version,
 )
 
 from gui_calculator.local_archive import inspect_archive
@@ -83,9 +82,10 @@ def archive_gex_history(
         Full recorded history, independent of daily execution-plan selection.
 
     """
-    require_archive_version(source)
     rows = koopec_calculus.archive_gex_history(
-        source.path, level_range.distance if level_range.enabled else None
+        source.path,
+        level_range.distance if level_range.enabled else None,
+        version=(source.modified_ns, source.size),
     )
     history = pd.DataFrame(
         rows,
@@ -105,7 +105,6 @@ def archive_gex_history(
     )
     history["time"] = pd.to_datetime(history["time"], unit="us", utc=True)
     history["options_gex_time"] = history["time"]
-    require_archive_version(source)
     return history
 
 

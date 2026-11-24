@@ -4,20 +4,24 @@
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
+import koopec_calculus
 import pandas as pd
+from shared.candles import candle_rows
 from shared.gex import OPTIONS_GEX_MODE
 from shared.gex_rules import GexHypothesis
-from shared.spot_execution import SpotRisk
+from shared.models import Trade
 from shared.strategy_data import prepare_backtest
-from shared.tunnel_execution import TunnelExecutionSettings, run_tunnel_backtest
+from shared.strategy_runner import validate_trade_timeline
+from snapshot_tunnel.validation import unix_microseconds
 
 MAXIMUM_PERCENT = 100
 
 if TYPE_CHECKING:
-    from shared.models import Trade
-    from shared.strategy_data import BacktestWindow
+    from shared.candles import Candle
+    from shared.strategy_data import BacktestWindow, PreparedBacktest
 
     from gui_calculator.settings import CalculatorSettings
 
@@ -84,19 +88,91 @@ def simulate_tunnel(
     prepared = prepare_backtest(candles, window=window)
     if prepared.data.empty:
         return pd.DataFrame(), []
-    return run_tunnel_backtest(
-        prepared,
+    bars = tuple(candle_rows(prepared.data))
+    marks, fills = koopec_calculus.simulate_snapshot_tunnel(
+        _native_bars(bars, prepared),
         settings.initial_capital,
-        settings=TunnelExecutionSettings(
-            risk=SpotRisk(
-                fee_pct=settings.fee_pct,
-                stop_loss_pct=settings.stop_loss_pct,
-                take_profit_pct=settings.take_profit_pct,
-                minimum_order_size=settings.minimum_order_size,
-                slippage_bps=settings.slippage_bps,
-            ),
-            allow_reentry=settings.allow_reentry,
-            funding_rate_pct=settings.funding_rate_pct,
-            use_insurance=False,
+        (
+            settings.fee_pct,
+            settings.stop_loss_pct,
+            settings.take_profit_pct,
+            settings.minimum_order_size,
+            settings.slippage_bps,
+            settings.funding_rate_pct,
+            settings.allow_reentry,
         ),
+    )
+    trades = [_trade(fill, bars) for fill in fills]
+    validate_trade_timeline(trades, prepared.window)
+    return (
+        pd.DataFrame([
+            {
+                "time": bar.time,
+                "equity": equity,
+                "position": quantity,
+                "close": bar.close,
+                "anchored_vwap": bar.anchored_vwap,
+            }
+            for bar, (equity, quantity) in zip(bars, marks, strict=True)
+        ]),
+        trades,
+    )
+
+
+def _native_bars(
+    bars: tuple[Candle, ...], prepared: PreparedBacktest
+) -> list[koopec_calculus.TunnelBarRow]:
+    days = (
+        prepared.scheduled_days.tolist()
+        if prepared.scheduled_days is not None
+        else [None] * len(bars)
+    )
+    return [
+        (
+            unix_microseconds(bar.time.to_pydatetime()),
+            (bar.open, bar.high, bar.low, bar.close),
+            (
+                int(bar.options_direction)
+                if bar.options_direction in {-1, 1}
+                else 0
+            ),
+            (
+                bar.options_target_ceiling
+                if math.isfinite(bar.options_target_ceiling)
+                else None
+            ),
+            day is not None and day != following,
+        )
+        for bar, (day, following) in zip(
+            bars, pairwise([*days, None]), strict=True
+        )
+    ]
+
+
+def _trade(
+    fill: koopec_calculus.TunnelTradeRow, bars: tuple[Candle, ...]
+) -> Trade:
+    (
+        capital,
+        side,
+        entry,
+        exit_at,
+        paid,
+        received,
+        quantity,
+        pnl,
+        rate,
+        reason,
+    ) = fill
+    return Trade(
+        deposit_size=capital,
+        side=side,
+        entry_time=bars[entry].time,
+        exit_time=bars[exit_at].time,
+        entry_price=paid,
+        exit_price=received,
+        quantity=quantity,
+        pnl=pnl,
+        return_pct=rate,
+        exit_reason=reason,
     )

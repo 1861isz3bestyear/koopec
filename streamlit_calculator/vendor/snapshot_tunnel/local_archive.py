@@ -3,22 +3,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import koopec_calculus
 from market_storage.archive import Archive
-from market_storage.inputs import CalculationInputs, load_inputs
+from market_storage.inputs import CalculationInputs
 from market_storage.models import Source, Window
-from snapshot_tunnel.archive_export import (
-    archived_snapshot,
-    collection_windows,
-)
+from snapshot_tunnel.archive_export import collection_windows
 from snapshot_tunnel.archive_model import LocalArchiveSource, RecordedCollection
 from snapshot_tunnel.archived_market import (
     ArchivedOscillators,
     calculate_oscillators,
 )
+from snapshot_tunnel.options_model import Option, Snapshot
 from snapshot_tunnel.tunnel import OiConfirmationMode, oscillator_vote
 from snapshot_tunnel.tunnel_flow import (
     OscillatorObservation,
@@ -34,7 +32,6 @@ if TYPE_CHECKING:
 
     from market_storage.models import Observation
     from snapshot_tunnel.oi_divergence import DivergenceSeries
-    from snapshot_tunnel.options_model import Snapshot
     from snapshot_tunnel.tunnel import TunnelSettings
 
 
@@ -100,17 +97,7 @@ def load_archive_snapshots(source: LocalArchiveSource) -> tuple[Snapshot, ...]:
         Validated daily chains at their actual availability times.
 
     """
-    require_archive_version(source)
-    archive = Archive(path=source.path)
-    snapshots: list[Snapshot] = []
-    for record in daily_collections(source):
-        snapshots.extend(
-            archived_snapshot(packet)
-            for packet in load_inputs(archive, record.window).gex
-            if packet.instruments.collection == record.identity
-        )
-    require_archive_version(source)
-    return tuple(snapshots)
+    return tuple(_snapshot(row) for row in _replay_snapshots(source))
 
 
 def load_archive_snapshot_at(
@@ -122,25 +109,40 @@ def load_archive_snapshot_at(
         The recorded profile without substituting a daily execution plan.
 
     """
-    require_archive_version(source)
-    record = max(
-        (item for item in source.collections if item.window.end <= cutoff),
-        key=lambda item: item.window.end,
-        default=None,
+    rows = _replay_snapshots(source, cutoff_us=unix_microseconds(cutoff))
+    return _snapshot(rows[0]) if rows else None
+
+
+def _replay_snapshots(
+    source: LocalArchiveSource, *, cutoff_us: int | None = None
+) -> list[koopec_calculus.ArchiveSnapshotRow]:
+    return koopec_calculus.archive_replay_snapshots(
+        source.path, (source.modified_ns, source.size), cutoff_us
     )
-    if record is None:
-        return None
-    packets = load_inputs(Archive(path=source.path), record.window).gex
-    snapshot = next(
-        (
-            archived_snapshot(packet)
-            for packet in packets
-            if packet.instruments.collection == record.identity
+
+
+def _snapshot(row: koopec_calculus.ArchiveSnapshotRow) -> Snapshot:
+    receipt_us, spot, contracts = row
+    return Snapshot(
+        asset="BTC",
+        timestamp=datetime(1970, 1, 1, tzinfo=UTC)
+        + timedelta(microseconds=receipt_us),
+        spot=spot,
+        options=tuple(
+            Option(
+                exchange="DERIBIT",
+                expiry=datetime.fromtimestamp(expiry_ms / 1000, UTC),
+                strike=strike,
+                side=side,
+                open_interest=interest,
+                multiplier=multiplier,
+                iv=iv,
+            )
+            for _, side, strike, expiry_ms, iv, interest, multiplier in (
+                contracts
+            )
         ),
-        None,
     )
-    require_archive_version(source)
-    return snapshot
 
 
 def load_archive_oscillators(source: LocalArchiveSource) -> ArchivedOscillators:

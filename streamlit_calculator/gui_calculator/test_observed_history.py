@@ -48,16 +48,19 @@ def test_archive_keeps_all_five_minute_collections(tmp_path: Path) -> None:
             stamp=first.timestamp + timedelta(minutes=5 * index),
         )
     source = inspect_archive(archive.path)
-    assert len(load_archive_snapshots(source)) == 1
+    daily = load_archive_snapshots(source)
+    assert len(daily) == 1
     history = archive_gex_history(source)
     assert len(history) == OBSERVATION_COUNT
     assert history["options_gex"].nunique() == OBSERVATION_COUNT
     assert history["time"].diff().dropna().eq(timedelta(minutes=5)).all()
     assert history["time"].iloc[0] == first.timestamp + timedelta(seconds=2)
-    expected = observation_history(
+    reference = tuple(
         archived_snapshot(packet)
         for packet in archive_collections(archive.path, asset="BTC")
     )
+    expected = observation_history(reference)
+    assert daily[0] in reference
     pd.testing.assert_frame_equal(
         history[expected.columns],
         expected,
@@ -70,11 +73,10 @@ def test_archive_keeps_all_five_minute_collections(tmp_path: Path) -> None:
     profile = load_archive_snapshot_at(
         source, first.timestamp + timedelta(minutes=5)
     )
-    assert profile is not None
-    assert profile.timestamp == history["time"].iloc[0]
+    assert profile == reference[0]
+    assert load_archive_snapshot_at(source, reference[0].timestamp) == profile
     latest = load_archive_snapshot_at(source, source.end)
-    assert latest is not None
-    assert latest.timestamp == source.end
+    assert latest == reference[-1]
 
 
 def test_visibility_does_not_fill_or_connect_missing_collections() -> None:

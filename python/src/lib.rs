@@ -23,10 +23,21 @@ fn snapshot(
     spot: f64,
     contracts: Vec<Contract>,
 ) -> PyResult<OptionSnapshot> {
+    let valuation = Valuation::new(spot, valued_at).map_err(invalid)?;
+    OptionSnapshot::new(
+        observed_at,
+        available_at,
+        valuation,
+        identified_contracts(contracts)?,
+    )
+    .map_err(invalid)
+}
+
+fn identified_contracts(contracts: Vec<Contract>) -> PyResult<Vec<IdentifiedContract>> {
     if contracts.len() > 10_000 {
         return Err(PyValueError::new_err("Too many option contracts"));
     }
-    let contracts = contracts
+    contracts
         .into_iter()
         .map(|(id, kind, strike, expiry, iv, interest, multiplier)| {
             let kind = match kind.as_str() {
@@ -38,9 +49,38 @@ fn snapshot(
                 .map_err(invalid)?;
             IdentifiedContract::new(id, contract).map_err(invalid)
         })
-        .collect::<PyResult<Vec<_>>>()?;
-    let valuation = Valuation::new(spot, valued_at).map_err(invalid)?;
-    OptionSnapshot::new(observed_at, available_at, valuation, contracts).map_err(invalid)
+        .collect()
+}
+
+#[pyfunction]
+fn gamma_grid(
+    py: Python<'_>,
+    valuation: (f64, i64),
+    contracts: Vec<Contract>,
+    prices: Vec<f64>,
+    find_flips: bool,
+) -> PyResult<Vec<f64>> {
+    let (spot, time) = valuation;
+    let valuation = Valuation::with_microseconds(spot, time).map_err(invalid)?;
+    if contracts
+        .iter()
+        .any(|contract| !contract.4.is_finite() || contract.4 <= 0.0)
+    {
+        return Err(PyValueError::new_err(
+            "Volatility is outside the supported numeric range.",
+        ));
+    }
+    let contracts = identified_contracts(contracts)
+        .map_err(|error| PyValueError::new_err(format!("Exposure inputs are invalid: {error}")))?;
+    let snapshot = OptionSnapshot::new(time, time, valuation, contracts).map_err(invalid)?;
+    py.detach(|| {
+        if find_flips {
+            calculus::gex::grid_flips(&snapshot, &prices)
+        } else {
+            calculus::gex::grid_exposures(&snapshot, &prices)
+        }
+    })
+    .map_err(|error| PyValueError::new_err(format!("Exposure calculation failed: {error:?}")))
 }
 
 #[pyfunction]
@@ -179,6 +219,9 @@ fn archive_index(path: PathBuf, asset: Option<&str>) -> PyResult<Vec<(String, St
             ArchiveError::Invalid => PyValueError::new_err(
                 "No complete successful BTC options chains or invalid archive metadata",
             ),
+            error @ (ArchiveError::Changed | ArchiveError::Metadata(_)) => {
+                archive_read_error(error, "read the local archive index")
+            }
         })?
         .into_iter()
         .map(|collection| {
@@ -210,20 +253,7 @@ fn deribit_chain(instruments: &str, quotes: &str, asset: &str) -> PyResult<Vec<C
         asset,
     )
     .map_err(|error| PyValueError::new_err(error.to_string()))?;
-    Ok(chain
-        .into_iter()
-        .map(|contract| {
-            (
-                contract.instrument,
-                contract.side.as_str().to_owned(),
-                contract.strike,
-                contract.expiry_ms,
-                contract.iv,
-                contract.open_interest,
-                contract.multiplier,
-            )
-        })
-        .collect())
+    Ok(chain.into_iter().map(deribit_contract_row).collect())
 }
 
 type SavedOptionsRow = (String, String, String, String, String, Option<String>);
@@ -646,19 +676,177 @@ fn prune_unmanaged_archive(py: Python<'_>, path: PathBuf, cutoff: String) -> PyR
         .map_err(|error| storage_error(py, error))
 }
 
+type TunnelBarRow = (i64, (f64, f64, f64, f64), i8, Option<f64>, bool);
+type TunnelRiskRow = (f64, f64, f64, f64, f64, f64, bool);
+type TunnelTradeRow = (
+    f64,
+    &'static str,
+    usize,
+    usize,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    &'static str,
+);
+type TunnelResult = (Vec<(f64, f64)>, Vec<TunnelTradeRow>);
+
+#[pyfunction]
+fn simulate_snapshot_tunnel(
+    py: Python<'_>,
+    rows: Vec<TunnelBarRow>,
+    capital: f64,
+    risk: TunnelRiskRow,
+) -> PyResult<TunnelResult> {
+    use calculus::{
+        accounts::Side,
+        execution::{TunnelBar, TunnelRisk, simulate_tunnel},
+    };
+    let (
+        fee_pct,
+        stop_loss_pct,
+        take_profit_pct,
+        minimum_order,
+        slippage_bps,
+        funding_pct,
+        allow_reentry,
+    ) = risk;
+    let risk = TunnelRisk {
+        fee_pct,
+        stop_loss_pct,
+        take_profit_pct,
+        minimum_order,
+        slippage_bps,
+        funding_pct,
+        allow_reentry,
+    };
+    let bars: Vec<_> = rows
+        .into_iter()
+        .map(
+            |(time_us, (open, high, low, close), direction, target_ceiling, ends_session)| {
+                TunnelBar {
+                    time_us,
+                    open,
+                    high,
+                    low,
+                    close,
+                    target_ceiling,
+                    ends_session,
+                    entry: match direction {
+                        1 => Some(Side::Long),
+                        -1 => Some(Side::Short),
+                        _ => None,
+                    },
+                }
+            },
+        )
+        .collect();
+    let run = py
+        .detach(|| simulate_tunnel(&bars, capital, &risk))
+        .map_err(|err| PyValueError::new_err(format!("Snapshot tunnel execution failed: {err}")))?;
+    Ok((
+        run.marks
+            .into_iter()
+            .map(|mark| (mark.equity, mark.quantity))
+            .collect(),
+        run.trades
+            .into_iter()
+            .map(|trade| {
+                (
+                    trade.capital,
+                    match trade.side {
+                        Side::Long => "Long",
+                        Side::Short => "Short",
+                    },
+                    trade.entry,
+                    trade.exit,
+                    trade.entry_price,
+                    trade.exit_price,
+                    trade.quantity,
+                    trade.pnl,
+                    trade.return_pct,
+                    trade.reason,
+                )
+            })
+            .collect(),
+    ))
+}
+
+fn deribit_contract_row(contract: market_data::deribit::Contract) -> Contract {
+    (
+        contract.instrument,
+        contract.side.as_str().to_owned(),
+        contract.strike,
+        contract.expiry_ms,
+        contract.iv,
+        contract.open_interest,
+        contract.multiplier,
+    )
+}
+
+type ArchiveSnapshotRow = (i64, f64, Vec<Contract>);
+
+#[pyfunction]
+fn archive_replay_snapshots(
+    py: Python<'_>,
+    path: PathBuf,
+    version: (i128, u64),
+    cutoff_us: Option<i64>,
+) -> PyResult<Vec<ArchiveSnapshotRow>> {
+    use archive::local_archive::{ArchiveVersion, ReplaySelection, replay_snapshots};
+    let (modified_ns, size) = version;
+    let selection = cutoff_us.map_or(ReplaySelection::Daily, ReplaySelection::Through);
+    py.detach(|| replay_snapshots(&path, ArchiveVersion { modified_ns, size }, selection))
+        .map_err(|error| archive_read_error(error, "load archived replay snapshots"))
+        .map(|snapshots| {
+            snapshots
+                .into_iter()
+                .map(|snapshot| {
+                    (
+                        snapshot.receipt_us,
+                        snapshot.spot,
+                        snapshot
+                            .contracts
+                            .into_iter()
+                            .map(deribit_contract_row)
+                            .collect(),
+                    )
+                })
+                .collect()
+        })
+}
+
+fn archive_read_error(error: archive::local_archive::ArchiveError, operation: &str) -> PyErr {
+    use archive::local_archive::ArchiveError;
+    match error {
+        ArchiveError::Changed => PyValueError::new_err(
+            "Local archive changed while loading; refresh to load its new window.",
+        ),
+        ArchiveError::Metadata(error) => PyErr::from(error),
+        error => PyValueError::new_err(format!("Cannot {operation}: {error:?}")),
+    }
+}
+
 type ArchiveGexRow = (i64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64);
 
 #[pyfunction]
+#[pyo3(signature = (path, distance, *, version=None))]
 fn archive_gex_history(
     py: Python<'_>,
     path: PathBuf,
     distance: Option<f64>,
+    version: Option<(i128, u64)>,
 ) -> PyResult<Vec<ArchiveGexRow>> {
+    use archive::local_archive::{ArchiveVersion, gex_history, gex_history_for_version};
     let history = py
-        .detach(|| archive::local_archive::gex_history(&path, distance))
-        .map_err(|error| {
-            PyValueError::new_err(format!("Cannot calculate archived GEX history: {error:?}"))
-        })?;
+        .detach(|| match version {
+            Some((modified_ns, size)) => {
+                gex_history_for_version(&path, distance, ArchiveVersion { modified_ns, size })
+            }
+            None => gex_history(&path, distance),
+        })
+        .map_err(|error| archive_read_error(error, "calculate archived GEX history"))?;
     let price = |value: Option<f64>| value.unwrap_or(f64::NAN);
     Ok(history
         .into_iter()
@@ -683,6 +871,9 @@ fn archive_gex_history(
 #[pymodule]
 fn koopec_calculus(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(archive_gex_history, module)?)?;
+    module.add_function(wrap_pyfunction!(archive_replay_snapshots, module)?)?;
+    module.add_function(wrap_pyfunction!(gamma_grid, module)?)?;
+    module.add_function(wrap_pyfunction!(simulate_snapshot_tunnel, module)?)?;
     module.add_function(wrap_pyfunction!(market_due, module)?)?;
     module.add_function(wrap_pyfunction!(prune_unmanaged_archive, module)?)?;
     module.add_function(wrap_pyfunction!(tunnel_entry_allowed, module)?)?;

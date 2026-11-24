@@ -11,6 +11,12 @@ def strike_exposures(
     spot: float,
     contracts: Sequence[tuple[str, str, float, int, float, float, float]],
 ) -> list[tuple[float, float, float]]: ...
+def gamma_grid(
+    valuation: tuple[float, int],
+    contracts: Sequence[tuple[str, str, float, int, float, float, float]],
+    prices: Sequence[float],
+    find_flips: bool,
+) -> list[float]: ...
 def options_max_pain(
     contracts: Sequence[tuple[str, str, float, int, float, float, float]],
 ) -> float | None: ...
@@ -34,11 +40,18 @@ def ranked_walls(
 def archive_index(
     path: Path, asset: str | None = None
 ) -> list[tuple[str, str, str]]: ...
+
+type DeribitContractRow = tuple[
+    str, Literal["call", "put"], float, int, float, float, float
+]
+type ArchiveSnapshotRow = tuple[int, float, list[DeribitContractRow]]
+
+def archive_replay_snapshots(
+    path: Path, version: tuple[int, int], cutoff_us: int | None
+) -> list[ArchiveSnapshotRow]: ...
 def deribit_chain(
     instruments: str, quotes: str, asset: str
-) -> list[
-    tuple[str, Literal["call", "put"], float, int, float, float, float]
-]: ...
+) -> list[DeribitContractRow]: ...
 def deribit_spot(payload: str) -> float: ...
 def save_options(
     path: Path, row: tuple[str, str, str, str, str, str | None]
@@ -115,7 +128,25 @@ def market_due(
     path: Path, key: tuple[str, str], now: str, interval: int
 ) -> bool: ...
 def prune_unmanaged_archive(path: Path, cutoff: str) -> bool: ...
-def archive_gex_history(path: Path, distance: float | None) -> list[
+
+type TunnelBarRow = tuple[
+    int, tuple[float, float, float, float], int, float | None, bool
+]
+type TunnelTradeRow = tuple[
+    float, str, int, int, float, float, float, float, float, str
+]
+
+def simulate_snapshot_tunnel(
+    rows: Sequence[TunnelBarRow],
+    capital: float,
+    risk: tuple[float, float, float, float, float, float, bool],
+) -> tuple[list[tuple[float, float]], list[TunnelTradeRow]]: ...
+def archive_gex_history(
+    path: Path,
+    distance: float | None,
+    *,
+    version: tuple[int, int] | None = None,
+) -> list[
     tuple[
         int,
         float,

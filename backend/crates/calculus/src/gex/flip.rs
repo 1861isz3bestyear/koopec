@@ -81,6 +81,9 @@ impl Curve {
     }
 
     fn value(&self, spot: f64) -> Result<f64, OptionsError> {
+        if !spot.is_finite() || spot <= 0.0 {
+            return Err(OptionsError::InvalidInput);
+        }
         let log_spot = spot.ln();
         let signed: f64 = self.0.iter().map(|term| term.amount(spot, log_spot)).sum();
         if signed.is_finite() {
@@ -177,6 +180,54 @@ pub fn search_flips(
     })
 }
 
+/// Evaluate a validated chain at the supplied prices in input order.
+pub fn grid_exposures(snapshot: &OptionSnapshot, prices: &[f64]) -> Result<Vec<f64>, OptionsError> {
+    let curve = Curve::new(snapshot)?;
+    prices.iter().map(|&price| curve.value(price)).collect()
+}
+
+/// Find sign changes on the calculator's explicit price grid.
+pub fn grid_flips(snapshot: &OptionSnapshot, prices: &[f64]) -> Result<Vec<f64>, OptionsError> {
+    let curve = Curve::new(snapshot)?;
+    let mut roots = Vec::new();
+    let mut previous: Option<(f64, f64)> = None;
+    for &price in prices {
+        let value = curve.value(price)?;
+        if value == 0.0 {
+            continue;
+        }
+        if let Some((left, low)) = previous
+            && low.is_sign_positive() != value.is_sign_positive()
+        {
+            roots.push(refine_calculator_flip(&curve, left, price, low)?);
+        }
+        previous = Some((price, value));
+    }
+    Ok(roots)
+}
+
+fn refine_calculator_flip(
+    curve: &Curve,
+    mut left: f64,
+    mut right: f64,
+    mut low: f64,
+) -> Result<f64, OptionsError> {
+    for _ in 0..40 {
+        let middle = (left + right) / 2.0;
+        let value = curve.value(middle)?;
+        if value == 0.0 {
+            return Ok(middle);
+        }
+        if value.is_sign_positive() == low.is_sign_positive() {
+            left = middle;
+            low = value;
+        } else {
+            right = middle;
+        }
+    }
+    Ok((left + right) / 2.0)
+}
+
 /// Reproduce the observed-history search grid, including every observed strike.
 pub fn observed_flip(snapshot: &OptionSnapshot) -> Result<Option<f64>, OptionsError> {
     let spot = snapshot.valuation.spot;
@@ -244,5 +295,15 @@ mod observed_tests {
         .unwrap();
         let expected = (90.0_f64 * 110.0).sqrt() * (-iv * iv / 2.0).exp();
         assert!((observed_flip(&snapshot).unwrap().unwrap() - expected).abs() < 1e-8);
+        let prices = [90.0, 110.0];
+        let values = grid_exposures(&snapshot, &prices).unwrap();
+        assert!(values[0] > 0.0 && values[1] < 0.0);
+        let roots = grid_flips(&snapshot, &prices).unwrap();
+        assert_eq!(roots.len(), 1);
+        assert!((roots[0] - expected).abs() < 1e-8);
+        assert_eq!(
+            grid_exposures(&snapshot, &[0.0]),
+            Err(OptionsError::InvalidInput)
+        );
     }
 }

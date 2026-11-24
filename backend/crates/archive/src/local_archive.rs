@@ -42,6 +42,8 @@ use std::{
 pub enum ArchiveError {
     Database,
     Invalid,
+    Changed,
+    Metadata(std::io::Error),
 }
 impl From<rusqlite::Error> for ArchiveError {
     fn from(_: rusqlite::Error) -> Self {
@@ -197,7 +199,9 @@ fn normalized_chain(
 }
 
 mod history;
-pub use history::{GexHistoryRow, gex_history};
+mod replay;
+pub use history::{ArchiveVersion, GexHistoryRow, gex_history, gex_history_for_version};
+pub use replay::{ReplaySelection, ReplaySnapshot, replay_snapshots};
 
 fn parse_contracts(
     values: &HashMap<String, Value>,

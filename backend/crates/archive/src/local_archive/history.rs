@@ -6,7 +6,28 @@ use calculus::options::{
 use chrono::DateTime;
 use market_data::deribit;
 use rusqlite::{Connection, OpenFlags};
-use std::{path::Path, thread};
+use std::{fs, path::Path, thread, time::UNIX_EPOCH};
+
+/// File metadata captured when the calculator selects an archive.
+pub struct ArchiveVersion {
+    pub modified_ns: i128,
+    pub size: u64,
+}
+
+impl ArchiveVersion {
+    pub(super) fn require_current(&self, path: &Path) -> Result<(), ArchiveError> {
+        let metadata = fs::metadata(path).map_err(ArchiveError::Metadata)?;
+        let modified = metadata.modified().map_err(ArchiveError::Metadata)?;
+        let modified_ns = match modified.duration_since(UNIX_EPOCH) {
+            Ok(duration) => duration.as_nanos() as i128,
+            Err(error) => -(error.duration().as_nanos() as i128),
+        };
+        if modified_ns != self.modified_ns || metadata.len() != self.size {
+            return Err(ArchiveError::Changed);
+        }
+        Ok(())
+    }
+}
 
 /// One receipt-time chart row, with unavailable flips and ranks represented explicitly.
 pub struct GexHistoryRow {
@@ -102,6 +123,18 @@ fn calculate_batch(
     })
 }
 
+/// Calculate history only if the file still matches the inspected version.
+pub fn gex_history_for_version(
+    path: &Path,
+    distance: Option<f64>,
+    version: ArchiveVersion,
+) -> Result<Vec<GexHistoryRow>, ArchiveError> {
+    version.require_current(path)?;
+    let history = gex_history(path, distance)?;
+    version.require_current(path)?;
+    Ok(history)
+}
+
 /// Calculate every complete BTC collection in one consistent read transaction.
 /// Read bounded batches of chains and value them concurrently.
 pub fn gex_history(path: &Path, distance: Option<f64>) -> Result<Vec<GexHistoryRow>, ArchiveError> {
@@ -147,6 +180,41 @@ mod tests {
     use super::*;
     use crate::storage::{Observation, save_market};
     use serde_json::json;
+
+    #[test]
+    fn history_rejects_stale_metadata_before_opening_sqlite() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("archive.sqlite");
+        let file = fs::File::create(&path).unwrap();
+        file.set_modified(UNIX_EPOCH).unwrap();
+        file.set_len(1).unwrap();
+        for version in [
+            ArchiveVersion {
+                modified_ns: 1,
+                size: 1,
+            },
+            ArchiveVersion {
+                modified_ns: 0,
+                size: 2,
+            },
+        ] {
+            assert!(matches!(
+                gex_history_for_version(&path, None, version),
+                Err(ArchiveError::Changed)
+            ));
+        }
+        assert!(matches!(
+            gex_history_for_version(
+                &temp.path().join("missing.sqlite"),
+                None,
+                ArchiveVersion {
+                    modified_ns: 0,
+                    size: 1,
+                },
+            ),
+            Err(ArchiveError::Metadata(error)) if error.kind() == std::io::ErrorKind::NotFound
+        ));
+    }
 
     #[test]
     fn history_keeps_the_exact_receipt_and_excludes_expired_contracts() {
@@ -195,7 +263,17 @@ mod tests {
             )
             .unwrap();
         }
-        let rows = gex_history(&path, Some(0.2)).unwrap();
+        let file = fs::File::open(&path).unwrap();
+        file.set_modified(UNIX_EPOCH).unwrap();
+        let rows = gex_history_for_version(
+            &path,
+            Some(0.2),
+            ArchiveVersion {
+                modified_ns: 0,
+                size: file.metadata().unwrap().len(),
+            },
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].receipt_us, receipt.timestamp_micros());
         assert_eq!(rows[0].calls, [Some(100.0), None]);
@@ -204,5 +282,19 @@ mod tests {
         assert_eq!(rows[0].net, rows[0].call);
         assert_eq!(rows[0].absolute, rows[0].call);
         assert_eq!(rows[0].flip, None);
+        let snapshots = crate::local_archive::replay_snapshots(
+            &path,
+            ArchiveVersion {
+                modified_ns: 0,
+                size: file.metadata().unwrap().len(),
+            },
+            crate::local_archive::ReplaySelection::Daily,
+        )
+        .unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].receipt_us, receipt.timestamp_micros());
+        assert_eq!(snapshots[0].spot, 100.0);
+        assert_eq!(snapshots[0].contracts.len(), 1);
+        assert_eq!(snapshots[0].contracts[0].instrument, "live");
     }
 }

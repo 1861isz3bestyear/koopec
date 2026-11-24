@@ -19,6 +19,7 @@ from snapshot_tunnel.local_archive import (
 )
 from snapshot_tunnel.options_model import parse_snapshots
 
+from gui_calculator.local_archive_view import archive_gex_history
 from gui_calculator.options_gex import EXAMPLE
 from gui_calculator.test_archived_market import STAMP
 from gui_calculator.test_archived_market import archive as archive
@@ -152,3 +153,5 @@ def test_replaced_archive_requires_new_coverage(archive: Archive) -> None:
         _ = load_archive_snapshots(source)
     with pytest.raises(ValueError, match="archive changed"):
         _ = load_archive_oscillators(source)
+    with pytest.raises(ValueError, match="archive changed"):
+        _ = archive_gex_history(source)

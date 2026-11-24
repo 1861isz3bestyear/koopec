@@ -8,14 +8,13 @@ import io
 import math
 from dataclasses import dataclass, replace
 from datetime import datetime
-from itertools import pairwise
 from typing import TYPE_CHECKING, Literal
 
-import numpy as np
+import koopec_calculus
 from snapshot_tunnel.option_levels import DEFAULT_LEVEL_RANGE, OptionLevelRange
+from snapshot_tunnel.validation import unix_microseconds
 
 if TYPE_CHECKING:
-    from numpy.typing import NDArray
     from snapshot_tunnel.order_book import BookSnapshot
 
 
@@ -408,47 +407,42 @@ def net_exposure(snapshot: Snapshot, spot: float) -> float:
 def grid_exposures(
     snapshot: Snapshot, prices: tuple[float, ...]
 ) -> tuple[float, ...]:
-    """Vectorize grid sampling without changing the option exposure formula.
+    """Sample the option exposure grid in the native calculator.
 
     Returns:
         Signed dollar exposures in input price order.
 
-    Raises:
-        ValueError: If volatility or evaluated exposure is not finite.
-
     """
+    return _gamma_grid(snapshot, prices, find_flips=False)
+
+
+def _gamma_grid(
+    snapshot: Snapshot, prices: tuple[float, ...], *, find_flips: bool
+) -> tuple[float, ...]:
+    if not prices:
+        return ()
     valued_at = snapshot.valuation_time or snapshot.timestamp
-    options = tuple(o for o in snapshot.options if o.expiry > valued_at)
-    if not options or not prices:
-        return (0.0,) * len(prices)
-    volatility = np.array([
-        o.iv * math.sqrt((o.expiry - valued_at).total_seconds() / (365 * 86400))
-        for o in options
-    ])
-    if not np.all(np.isfinite(volatility) & (volatility > 0)):
-        msg = "Volatility is outside the supported numeric range."
-        raise ValueError(msg)
-    spots = np.array(prices)[:, None]
-    strikes = np.array([o.strike for o in options])
-    weights = np.array([
-        o.open_interest * o.multiplier * (1 if o.side == "call" else -1)
-        for o in options
-    ])
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-        d1 = np.log(spots / strikes) / volatility + volatility / 2
-        amounts = (
-            np.exp(-d1 * d1 / 2)
-            / volatility
-            / math.sqrt(2 * math.pi)
-            * weights
-            * spots
-            * 0.01
+    contracts = [
+        (
+            f"{index:05}",
+            option.side,
+            option.strike,
+            unix_microseconds(option.expiry),
+            option.iv,
+            option.open_interest,
+            option.multiplier,
         )
-        values: NDArray[np.float64] = np.sum(amounts, axis=1)
-    if not np.all(np.isfinite(values)):
-        msg = "Exposure is outside the supported numeric range."
-        raise ValueError(msg)
-    return tuple(float(value) for value in values.flat)
+        for index, option in enumerate(snapshot.options)
+        if option.expiry > valued_at
+    ]
+    return tuple(
+        koopec_calculus.gamma_grid(
+            (snapshot.spot, unix_microseconds(valued_at)),
+            contracts,
+            prices,
+            find_flips,
+        )
+    )
 
 
 def value_snapshot(snapshot: Snapshot, candle: CandleClose) -> Snapshot:
@@ -520,26 +514,7 @@ def gamma_flips(
         Refined roots; a flat zero profile has no identified flip.
 
     """
-    roots: list[float] = []
-    samples = zip(prices, grid_exposures(snapshot, prices), strict=True)
-    nonzero = [(price, value) for price, value in samples if value != 0]
-    for start, end in pairwise(nonzero):
-        left, low_value = start
-        right, high_value = end
-        if (low_value > 0) == (high_value > 0):
-            continue
-        for _ in range(40):
-            middle = (left + right) / 2
-            value = net_exposure(snapshot, middle)
-            if value == 0:
-                left = right = middle
-                break
-            if (value > 0) == (low_value > 0):
-                left, low_value = middle, value
-            else:
-                right = middle
-        roots.append((left + right) / 2)
-    return tuple(roots)
+    return _gamma_grid(snapshot, prices, find_flips=True)
 
 
 def max_pain(snapshot: Snapshot) -> float | None:
