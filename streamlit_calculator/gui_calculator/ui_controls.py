@@ -223,7 +223,7 @@ def render_strategy_controls(settings: CalculatorSettings) -> None:
     _ = st.selectbox(
         "GEX entry hypothesis", [GexHypothesis.TUNNEL.value], disabled=True
     )
-    settings.tunnel = render_tunnel_controls()
+    settings.tunnel = render_tunnel_controls(settings)
     _ = st.info(
         "Candle prices come from the selected source. GEX and independent"
         " oscillator receipts come from the selected archive. Missing or stale"

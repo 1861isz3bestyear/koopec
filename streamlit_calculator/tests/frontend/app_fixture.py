@@ -67,6 +67,40 @@ def candles(
     })
 
 
+def spot_candles(
+    symbol: str, interval: str, *, start_ms: int, end_ms: int, category: str
+) -> pd.DataFrame:
+    """Provide hourly spot candles with separated visits to both extremes.
+
+    Returns:
+        Deterministic OHLC data including the lookback warmup.
+
+    """
+    assert symbol in {"BTCUSDT", "ETHUSDT"}
+    assert interval in {"1h", "1m", "5m"}
+    assert category == "spot"
+    start = pd.Timestamp(start_ms, unit="ms", tz="UTC")
+    end = pd.Timestamp(end_ms, unit="ms", tz="UTC")
+    if interval != "1h":
+        cadence = "1min" if interval == "1m" else "5min"
+        times = pd.date_range(start.ceil(cadence), end, freq=cadence)
+        return pd.DataFrame({
+            "time": times,
+            "open": [
+                {0: 81000, 1: 81000, 5: 79000}.get(time.minute, 80000)
+                for time in times
+            ],
+        })
+    times = pd.date_range(start, end, freq="h")
+    return pd.DataFrame({
+        "time": times,
+        "open": 80000,
+        "high": [81000 if time.hour % 3 == 0 else 80100 for time in times],
+        "low": [79000 if time.hour % 3 == 1 else 79900 for time in times],
+        "close": 80000,
+    })
+
+
 def child_candles(
     symbol: str, interval: str, *, start_ms: int, end_ms: int
 ) -> pd.DataFrame:
@@ -232,6 +266,10 @@ def install_exchange_fixtures() -> ExitStack:
         patch(
             "gui_calculator.snapshot_dashboard.load_price_history",
             side_effect=prices,
+        ),
+        patch(
+            "gui_calculator.snapshot_retest.fetch_bybit_klines",
+            side_effect=spot_candles,
         ),
         patch("gui_calculator.bitget_margin.fetch_growth", side_effect=growth),
         patch(

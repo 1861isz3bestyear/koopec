@@ -28,6 +28,7 @@ from gui_calculator.snapshot_oscillator import (
     load_price_history,
     saved_depth_history,
 )
+from gui_calculator.snapshot_retest import RETEST_ROW, add_retest_panel
 
 if TYPE_CHECKING:
     from snapshot_tunnel.options_model import Snapshot
@@ -36,23 +37,24 @@ if TYPE_CHECKING:
 
 
 def snapshot_dashboard_chart(snapshot: Snapshot, *, days: int) -> go.Figure:
-    """Build four aligned panels with a common cutoff and time cursor.
+    """Build five aligned panels with a common cutoff and time cursor.
 
     Returns:
         A shared-axis figure, including reference levels on empty panels.
 
     """
     chart = make_subplots(
-        rows=4,
+        rows=5,
         cols=1,
         shared_xaxes=True,
-        row_heights=[0.4, 0.2, 0.2, 0.2],
-        vertical_spacing=0.075,
+        row_heights=[0.28, 0.15, 0.15, 0.15, 0.27],
+        vertical_spacing=0.06,
         subplot_titles=[
             "Price",
             "Limit orders oscillator",
             "Margin loan oscillator",
             "OI divergence oscillator",
+            "Retest oscillator · Bybit spot · 1h",
         ],
     )
     _ = chart.update_layout(
@@ -70,7 +72,13 @@ def snapshot_dashboard_chart(snapshot: Snapshot, *, days: int) -> go.Figure:
         ]
     )
     for row, label in enumerate(
-        (f"{snapshot.asset}USDT", "Bid share %", "Margin rate", "Divergence"),
+        (
+            f"{snapshot.asset}USDT",
+            "Bid share %",
+            "Margin rate",
+            "Divergence",
+            "Spot price",
+        ),
         start=1,
     ):
         _ = chart.update_yaxes(title_text=label, row=row, col=1)
@@ -88,7 +96,7 @@ def snapshot_dashboard_chart(snapshot: Snapshot, *, days: int) -> go.Figure:
     chart = style_options_chart(chart)
     _ = chart.update_layout(
         title=f"{snapshot.asset} · snapshot oscillators",
-        height=1000,
+        height=1250,
         hovermode="x unified",
         hoversubplots="axis",
         hoverdistance=-1,
@@ -98,6 +106,7 @@ def snapshot_dashboard_chart(snapshot: Snapshot, *, days: int) -> go.Figure:
     )
     _ = chart.update_xaxes(
         type="date",
+        rangeslider_visible=False,
         range=[snapshot.timestamp - timedelta(days=days), snapshot.timestamp],
         matches="x",
         showspikes=True,
@@ -243,7 +252,7 @@ def render_snapshot_dashboard(
 def render_dashboard_window(
     snapshot: Snapshot, *, chart_ui: IndicatorUI = st
 ) -> None:
-    """Render price and all three oscillators in one synchronized chart."""
+    """Render price and all four oscillators in one synchronized chart."""
     if not st.toggle("Show snapshot oscillators", key="snapshot_oscillators"):
         return
     period = st.selectbox(
@@ -267,6 +276,7 @@ def render_dashboard_window(
         ("Limit orders", _add_limit_orders),
         ("Margin loan", _add_margin),
         ("OI divergence", _add_oi),
+        ("Retest", add_retest_panel),
     ):
         try:
             loader(chart, snapshot, days=days)
@@ -279,7 +289,10 @@ def render_dashboard_window(
         ) as exc:
             _ = st.warning(f"{label} unavailable: {exc}")
     # Empty panels still need a hover target to keep the shared cursor active.
-    for row, level in ((2, 50), (3, 50), (4, 0.5)):
+    targets = [(2, 50.0), (3, 50.0), (4, 0.5)]
+    if not any(isinstance(trace, go.Candlestick) for trace in chart.data):
+        targets.append((RETEST_ROW, 0.0))
+    for row, level in targets:
         _ = chart.add_trace(
             go.Scatter(
                 x=[
@@ -309,7 +322,8 @@ def render_dashboard_window(
         " share (50 = balanced; zones 30/70). Margin: Bitget growth momentum"
         " or OKX/uploaded borrowing share (zones 38/62). OI: 1 = divergence, 0"
         " = confirmation; unavailable before detection or after gaps. States"
-        " appear at detection time."
+        " appear at detection time. Retest: green lines connect prior highs"
+        " and lows from completed hourly candles to sampled spot price touches."
     )
 
 

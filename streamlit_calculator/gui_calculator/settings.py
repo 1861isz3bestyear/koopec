@@ -5,8 +5,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, date, time, tzinfo
+from enum import StrEnum
 from io import BytesIO, StringIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from shared.child_assets import ChildSymbol
@@ -16,6 +17,26 @@ from shared.gex_rules import GexHypothesis
 from shared.tunnel import TunnelSettings
 
 type CSVSource = str | BytesIO | StringIO
+
+
+DEFAULT_RETEST_LOOKBACK = 48
+
+
+class RetestMode(StrEnum):
+    """How touching an hourly level supports an entry."""
+
+    EITHER = "Either level → long and short"
+    REVERSAL = "High → short / Low → long"
+    BREAKOUT = "High → long / Low → short"
+
+
+@dataclass(frozen=True, kw_only=True)
+class RetestSettings:
+    """Price sampling cadence, hourly lookback, and direction mapping."""
+
+    lookback: int = DEFAULT_RETEST_LOOKBACK
+    interval: Literal["1m", "5m"] = "5m"
+    mode: RetestMode = RetestMode.REVERSAL
 
 
 @dataclass
@@ -43,6 +64,7 @@ class CalculatorSettings:
     child_assets: tuple[ChildSymbol, ...] = ()
     gex_hypothesis: GexHypothesis = GexHypothesis.TUNNEL
     tunnel: TunnelSettings = field(default_factory=TunnelSettings)
+    retest: RetestSettings | None = None
     initial_capital: float = 10000.0
     minimum_order_size: float = 5.0
     fee_pct: float = 0.04

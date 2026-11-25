@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import plotly.graph_objects as go
 from shared.time_utils import chart_times
+from snapshot_tunnel.tunnel_flow import BOTH_DIRECTIONS
 
 if TYPE_CHECKING:
     from datetime import tzinfo
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 _STREAMS = (
     ("book", "Limit-order", "#007f91"),
     ("margin", "Margin-loan", "#b45309"),
+    ("retest", "Retest", "#15803d"),
     ("oi", "OI divergence", "#7c3aed"),
     ("oi_momentum", "High OI momentum (either direction)", "#7c3aed"),
     ("oi_convergence", "OI convergence", "#7c3aed"),
@@ -38,7 +40,12 @@ def add_tunnel_confirmations(
             else ((1, "long", "triangle-up"), (-1, "short", "triangle-down"))
         )
         for direction, side, symbol in markers:
-            points = data.loc[data[column].eq(direction)]
+            votes = (
+                (direction, BOTH_DIRECTIONS)
+                if source == "retest"
+                else (direction,)
+            )
+            points = data.loc[data[column].isin(votes)]
             _ = chart.add_trace(
                 go.Scatter(
                     x=chart_times(points["time"], timezone),

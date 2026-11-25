@@ -35,6 +35,7 @@ from snapshot_tunnel.tunnel_oscillators import (
 )
 
 _HOURLY_OI = timedelta(hours=1)
+BOTH_DIRECTIONS = 2
 
 if TYPE_CHECKING:
     from snapshot_tunnel.options_model import Snapshot
@@ -48,6 +49,7 @@ class OscillatorObservation:
     direction: int
     calculatable: bool = True
     momentum: float | None = None
+    valid_for: timedelta | None = None
 
 
 def fresh_observation(
@@ -66,7 +68,12 @@ def fresh_observation(
     if index < 0:
         return None
     point = stream[index]
-    if not point.calculatable or now - point.available > maximum_age:
+    age = now - point.available
+    if (
+        not point.calculatable
+        or age > maximum_age
+        or (point.valid_for is not None and age >= point.valid_for)
+    ):
         return None
     return point
 
@@ -91,6 +98,7 @@ class TunnelFlow:
     oi_convergence: tuple[OscillatorObservation, ...] = ()
 
     oi_momentum: tuple[OscillatorObservation, ...] = ()
+    retest: tuple[OscillatorObservation, ...] = ()
 
     def oi_stream(
         self, mode: OiConfirmationMode
@@ -116,14 +124,22 @@ class TunnelFlow:
             Calculatable observations available within the age limit.
 
         """
-        observations: list[OscillatorObservation] = []
-        for enabled, stream in (
-            (settings.use_book, self.book),
-            (settings.use_margin, self.margin),
-            (
-                settings.use_oi,
-                self.oi_stream(settings.oi_mode),
-            ),
+        return tuple(self._fresh_streams(now, settings=settings).values())
+
+    def _fresh_streams(
+        self, now: datetime, *, settings: TunnelSettings
+    ) -> dict[str, OscillatorObservation]:
+        observations: dict[str, OscillatorObservation] = {}
+        oi_label = (
+            "oi"
+            if settings.oi_mode == OiConfirmationMode.DIVERGENCE
+            else f"oi_{settings.oi_mode}"
+        )
+        for name, enabled, stream in (
+            ("book", settings.use_book, self.book),
+            ("margin", settings.use_margin, self.margin),
+            (oi_label, settings.use_oi, self.oi_stream(settings.oi_mode)),
+            ("retest", settings.use_retest, self.retest),
         ):
             if not enabled:
                 continue
@@ -131,8 +147,8 @@ class TunnelFlow:
                 stream, now, maximum_age=settings.maximum_age
             )
             if point is not None:
-                observations.append(point)
-        return tuple(observations)
+                observations[name] = point
+        return observations
 
     def entry(
         self,
@@ -219,38 +235,34 @@ class TunnelFlow:
             Signed confirmations; unavailable and neutral evidence is zero.
 
         """
-        streams = (
-            ("book", settings.use_book, TunnelFlow(book=self.book)),
-            ("margin", settings.use_margin, TunnelFlow(margin=self.margin)),
-            (
-                (
-                    "oi"
-                    if settings.oi_mode == OiConfirmationMode.DIVERGENCE
-                    else f"oi_{settings.oi_mode}"
-                ),
-                settings.use_oi,
-                TunnelFlow(
-                    oi=self.oi,
-                    oi_convergence=self.oi_convergence,
-                    oi_momentum=self.oi_momentum,
-                ),
-            ),
+        observations = self._fresh_streams(now, settings=settings)
+        oi_label = (
+            "oi"
+            if settings.oi_mode == OiConfirmationMode.DIVERGENCE
+            else f"oi_{settings.oi_mode}"
         )
         return {
-            f"tunnel_confirmation_{name}": next(
-                (
-                    (
-                        int(point.momentum >= settings.oi_momentum_minimum)
-                        if point.momentum is not None
-                        else point.direction
-                    )
-                    for point in flow.available(now, settings=settings)
-                ),
-                0,
+            f"tunnel_confirmation_{name}": self._marker_direction(
+                observations.get(name), settings=settings
             )
-            for name, enabled, flow in streams
+            for name, enabled in (
+                ("book", settings.use_book),
+                ("margin", settings.use_margin),
+                (oi_label, settings.use_oi),
+                ("retest", settings.use_retest),
+            )
             if enabled
         }
+
+    @staticmethod
+    def _marker_direction(
+        point: OscillatorObservation | None, *, settings: TunnelSettings
+    ) -> int:
+        if point is None:
+            return 0
+        if point.momentum is not None:
+            return int(point.momentum >= settings.oi_momentum_minimum)
+        return point.direction
 
     def direction(self, now: datetime, *, settings: TunnelSettings) -> int:
         """Choose an unambiguous oscillator quorum without a GEX prerequisite.
@@ -262,7 +274,16 @@ class TunnelFlow:
         observations = self.available(now, settings=settings)
         long = sum(point.direction == 1 for point in observations)
         short = sum(point.direction == -1 for point in observations)
-        required = max(1, settings.votes)
+        either = sum(
+            point.direction == BOTH_DIRECTIONS for point in observations
+        )
+        required = max(1, settings.votes) - either
+        if (
+            either
+            and (long == 0) != (short == 0)
+            and max(long, short) >= required
+        ):
+            return 1 if long else -1
         if (long >= required) == (short >= required):
             return 0
         return 1 if long >= required else -1
@@ -280,8 +301,13 @@ class TunnelFlow:
             point.direction == direction
             or (
                 direction != 0
-                and point.momentum is not None
-                and point.momentum >= settings.oi_momentum_minimum
+                and (
+                    point.direction == BOTH_DIRECTIONS
+                    or (
+                        point.momentum is not None
+                        and point.momentum >= settings.oi_momentum_minimum
+                    )
+                )
             )
             for point in self.available(now, settings=settings)
         )

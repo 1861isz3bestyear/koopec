@@ -5,13 +5,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 import streamlit as st
 from shared.option_levels import OptionLevelRange
 from shared.tunnel import OiConfirmationMode, TunnelSettings, TunnelState
 
+from gui_calculator.snapshot_retest import retest_settings
 
-def render_tunnel_controls() -> TunnelSettings:
+if TYPE_CHECKING:
+    from gui_calculator.settings import CalculatorSettings
+
+
+def render_tunnel_controls(settings: CalculatorSettings) -> TunnelSettings:
     """Expose scenario thresholds, independent switches and quorum.
 
     Returns:
@@ -68,7 +74,8 @@ def render_tunnel_controls() -> TunnelSettings:
         " orders are disabled; the available capital funds one position."
     )
     return _oscillator_controls(
-        TunnelSettings(
+        settings,
+        base=TunnelSettings(
             level_range=level_range,
             tight_width=tight / 100,
             proximity=proximity / 100,
@@ -83,6 +90,8 @@ def render_tunnel_controls() -> TunnelSettings:
 
 
 def _oscillator_controls(
+    settings: CalculatorSettings,
+    *,
     base: TunnelSettings,
 ) -> TunnelSettings:
     """Collect independent oscillator evidence and explicitly document formulas.
@@ -94,6 +103,16 @@ def _oscillator_controls(
     book = st.toggle("Confirm with limit-order oscillator", value=True)
     margin = st.toggle("Confirm with margin-loan oscillator", value=False)
     oi = st.toggle("Confirm with OI oscillator", value=False)
+    retest = st.toggle(
+        "Confirm with Retest oscillator",
+        help="Replay votes use the selected Retest confirmation mode.",
+    )
+    show_retest = st.toggle(
+        "Show Retest oscillator",
+        key="strategy_retest",
+        help="Chart only. Uses completed BTCUSDT spot 1-hour candles.",
+    )
+    settings.retest = retest_settings() if retest or show_retest else None
     oi_mode = st.selectbox(
         "OI confirmation regime",
         tuple(OiConfirmationMode),
@@ -126,7 +145,7 @@ def _oscillator_controls(
         or oi_mode != OiConfirmationMode.MOMENTUM,
         help="Smoothed over three samples. Confirms either breakout direction.",
     )
-    enabled = sum((book, margin, oi))
+    enabled = sum((book, margin, oi, retest))
     votes = st.selectbox(
         "Required agreeing oscillators",
         list(range(1, enabled + 1)) or [0],
@@ -147,9 +166,9 @@ def _oscillator_controls(
         "Maximum oscillator age, minutes", min_value=1, value=10
     )
     _ = st.caption(
-        f"Enabled oscillators use stored receipts. Active sources: {enabled}."
-        " OI uses five-minute"
-        " samples; gaps reset its 12-hour warmup."
+        f"Book, margin and OI use stored receipts. Active sources: {enabled}."
+        " Retest checks sampled quotes against completed 1-hour candles. OI"
+        " uses five-minute samples; gaps reset its 12-hour warmup."
     )
     if enabled == 0:
         _ = st.warning("Enable at least one oscillator to authorize trades.")
@@ -158,6 +177,7 @@ def _oscillator_controls(
         use_book=book,
         use_margin=margin,
         use_oi=oi,
+        use_retest=retest,
         oi_mode=oi_mode,
         oi_momentum_minimum=momentum_minimum,
         votes=votes,

@@ -45,9 +45,13 @@ from gui_calculator.snapshot_balance_view import (
 )
 from gui_calculator.snapshot_dashboard import render_snapshot_dashboard
 from gui_calculator.snapshot_request_view import render_snapshot_request
+from gui_calculator.snapshot_retest import (
+    add_retest_history,
+)
 
 if TYPE_CHECKING:
     from gui_calculator.observed_history import RecordedCharts
+    from gui_calculator.snapshot_retest import RetestHistory
     from gui_calculator.view_types import IndicatorUI
 
 DEFAULT_OPTIONS_CSV = Path(__file__).with_name("options_snapshot.csv")
@@ -60,6 +64,7 @@ class OptionsDisplay:
 
     level_range: OptionLevelRange = field(default_factory=OptionLevelRange)
     show_history_chart: bool = True
+    retest: RetestHistory | None = None
 
 
 DEFAULT_OPTIONS_DISPLAY = OptionsDisplay()
@@ -349,58 +354,75 @@ def _render_live_candles(snapshot: Snapshot) -> None:
             _ = st.error(f"Invalid candle data: {exc}")
 
 
+def _mask_expired_plans(
+    history: pd.DataFrame, timeline: pd.Series[pd.Timestamp]
+) -> None:
+    """Hide plan values once a daily plan expires."""
+    valid = timeline < pd.to_datetime(history["options_valid_until"], utc=True)
+    columns = [
+        "options_gex",
+        "options_call_gex",
+        "options_put_gex",
+        "options_absolute_gex",
+        "options_gamma_flip",
+        "options_call_wall",
+        "options_put_wall",
+        "options_call_1",
+        "options_call_2",
+        "options_put_1",
+        "options_put_2",
+        "options_monitored_gex",
+    ]
+    history.loc[~valid, [name for name in columns if name in history]] = float(
+        "nan"
+    )
+    history["options_price"] = history["open"]
+
+
+def _strategy_history(
+    data: pd.DataFrame, *, recorded: RecordedCharts | None, daily: bool
+) -> pd.DataFrame:
+    """Use recorded observations or prepare the requested replay history.
+
+    Returns:
+        Plot-ready observations with expired plan levels removed.
+
+    """
+    if recorded is not None:
+        return recorded.gex.copy()
+    if not daily:
+        return data.dropna(subset=["options_gex_time"]).drop_duplicates(
+            "options_gex_time"
+        )
+    history = data.copy()
+    _mask_expired_plans(history, history["options_decision_at"])
+    return history
+
+
 def render_strategy_history(
     chart_ui: IndicatorUI,
     data: pd.DataFrame,
     *,
     observed_history: RecordedCharts | None = None,
+    retest: RetestHistory | None = None,
 ) -> None:
     """Plot every calculated interval and expose its numeric values."""
     if "options_gex_time" not in data:
         return
     daily = observed_history is None and "options_decision_at" in data
-    history = (
-        observed_history.gex.copy()
-        if observed_history is not None
-        else data.copy()
-    )
-    if observed_history is None and not daily:
-        history = history.dropna(subset=["options_gex_time"]).drop_duplicates(
-            "options_gex_time"
-        )
+    history = _strategy_history(data, recorded=observed_history, daily=daily)
     timeline = history[(
         "time"
         if observed_history is not None
         else ("options_decision_at" if daily else "options_gex_time")
     )]
-    if daily:
-        valid = timeline < pd.to_datetime(
-            history["options_valid_until"], utc=True
-        )
-        columns = [
-            "options_gex",
-            "options_call_gex",
-            "options_put_gex",
-            "options_absolute_gex",
-            "options_gamma_flip",
-            "options_call_wall",
-            "options_put_wall",
-            "options_call_1",
-            "options_call_2",
-            "options_put_1",
-            "options_put_2",
-            "options_monitored_gex",
-        ]
-        history.loc[~valid, [name for name in columns if name in history]] = (
-            float("nan")
-        )
-        history["options_price"] = history["open"]
     show_oscillators = observed_history is not None and bool(
         observed_history.oscillators
     )
     level_row = 2
+    base_rows = 6 if show_oscillators else level_row
     chart = make_subplots(
-        rows=6 if show_oscillators else level_row,
+        rows=base_rows + int(retest is not None),
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.035,
@@ -481,13 +503,16 @@ def render_strategy_history(
             row=6,
             col=1,
         )
+    if retest is not None:
+        _plot_strategy_retest(chart, retest, row=base_rows + 1)
     _ = chart.update_layout(
         title=(
             "GEX history · recorded observations"
             if observed_history is not None
             else "GEX history · selected timeframe"
         ),
-        height=1450 if show_oscillators else 900,
+        height=(1450 if show_oscillators else 900)
+        + 250 * int(retest is not None),
         hovermode="x unified",
     )
     _ = chart.update_yaxes(title_text="USD / 1% move", row=1, col=1)
@@ -514,6 +539,15 @@ def render_strategy_history(
         hide_index=True,
         use_container_width=True,
     )
+
+
+def _plot_strategy_retest(
+    chart: go.Figure, retest: RetestHistory, *, row: int
+) -> None:
+    """Place hourly spot candles below the archive oscillator lines."""
+    add_retest_history(chart, retest, row=row)
+    _ = chart.update_yaxes(title_text="Retest · spot 1h", row=row, col=1)
+    _ = chart.update_xaxes(rangeslider_visible=False)
 
 
 def render_options_gex_strategy(
@@ -568,5 +602,8 @@ def render_options_gex_strategy(
                 )
             else:
                 render_strategy_history(
-                    chart_ui, data, observed_history=observed_history
+                    chart_ui,
+                    data,
+                    observed_history=observed_history,
+                    retest=display.retest,
                 )

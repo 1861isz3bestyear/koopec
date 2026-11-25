@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Never, cast
+from typing import TYPE_CHECKING, Literal, Never, cast
 
 import numpy as np
 import pandas as pd
@@ -354,8 +354,9 @@ def fetch_bybit_klines(
     *,
     start_ms: int,
     end_ms: int,
+    category: Literal["linear", "spot"] = "linear",
 ) -> pd.DataFrame:
-    """Fetch Bybit linear perpetual candles in the standard schema.
+    """Fetch Bybit candles in the standard schema.
 
     Returns:
         Chronologically ordered, deduplicated candles.
@@ -378,11 +379,11 @@ def fetch_bybit_klines(
 
     rows: list[list[float]] = []
     cursor_end = end_ms
-    while cursor_end > start_ms:
+    while cursor_end >= start_ms:
         response = requests.get(
             BYBIT_KLINES_URL,
             params={
-                "category": "linear",
+                "category": category,
                 "symbol": symbol,
                 "interval": bybit_intervals[interval],
                 "start": start_ms,

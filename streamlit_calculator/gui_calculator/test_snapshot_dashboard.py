@@ -29,7 +29,7 @@ from gui_calculator.test_oi_divergence import market_samples
 def test_dashboard_source_cutoff_and_shared_axes(
     source: str, timing: str
 ) -> None:
-    """Keep future lending out and all four panels on the same window."""
+    """Keep future lending out and all five panels on the same window."""
     snapshot = parse_snapshots(EXAMPLE)[0]
     cutoff = (
         datetime.now(UTC)
@@ -66,10 +66,14 @@ def test_dashboard_source_cutoff_and_shared_axes(
         ),
         patch(
             "gui_calculator.snapshot_dashboard.st.number_input",
-            return_value=0.1,
+            side_effect=[0.1, 0.1, 48],
         ),
         patch("gui_calculator.snapshot_dashboard.st.caption") as caption,
         patch("gui_calculator.snapshot_dashboard.st.info"),
+        patch(
+            "gui_calculator.snapshot_retest.load_retest_candles",
+            return_value=(),
+        ) as retest,
         patch(
             "gui_calculator.snapshot_dashboard.saved_depth_history",
             return_value=(),
@@ -94,6 +98,9 @@ def test_dashboard_source_cutoff_and_shared_axes(
         ),
     ):
         render_snapshot_dashboard(snapshot)
+    retest.assert_called_once_with(
+        f"{snapshot.asset}USDT", cutoff, days=7, lookback=48
+    )
     assert len(charts) == 1
     if source == "Bitget public loan growth":
         captions = [
@@ -108,7 +115,7 @@ def test_dashboard_source_cutoff_and_shared_axes(
     chart = charts[0]
     assert isinstance(chart, go.Figure)
     layout = object_mapping(json_object(chart.to_json())["layout"])
-    for key in ("xaxis", "xaxis2", "xaxis3", "xaxis4"):
+    for key in ("xaxis", "xaxis2", "xaxis3", "xaxis4", "xaxis5"):
         axis = object_mapping(layout[key])
         assert axis["matches"] == "x"
         end = datetime.fromisoformat(str(object_list(axis["range"])[1]))
@@ -132,7 +139,7 @@ def test_dashboard_source_cutoff_and_shared_axes(
     )
     assert {
         trace.yaxis for trace in chart.data if isinstance(trace, go.Scatter)
-    } == {"y", "y2", "y3", "y4"}
+    } == {"y", "y2", "y3", "y4", "y5"}
 
 
 def test_price_failure_preserves_other_panels() -> None:
@@ -162,10 +169,12 @@ def test_price_failure_preserves_other_panels() -> None:
         patch("gui_calculator.snapshot_dashboard._add_limit_orders") as books,
         patch("gui_calculator.snapshot_dashboard._add_margin") as margin,
         patch("gui_calculator.snapshot_dashboard._add_oi") as oi,
+        patch("gui_calculator.snapshot_dashboard.add_retest_panel") as retest,
     ):
         render_snapshot_dashboard(parse_snapshots(EXAMPLE)[0])
     warning.assert_called_once_with("Price unavailable: offline")
     books.assert_called_once()
     margin.assert_called_once()
     oi.assert_called_once()
+    retest.assert_called_once()
     assert len(charts) == 1

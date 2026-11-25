@@ -19,8 +19,15 @@ def tunnel_values(settings: TunnelSettings) -> dict[str, object]:
     Returns:
         JSON-compatible strategy parameters.
 
+    Raises:
+        ValueError: If replay-only Retest confirmation is enabled.
+
     """
+    if settings.use_retest:
+        msg = "Retest confirmation is available in replay only."
+        raise ValueError(msg)
     values: dict[str, object] = asdict(settings)
+    _ = values.pop("use_retest")
     values["maximum_age"] = settings.maximum_age.total_seconds()
     return values
 

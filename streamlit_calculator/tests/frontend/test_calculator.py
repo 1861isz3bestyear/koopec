@@ -75,9 +75,9 @@ def test_backtester_theme_and_controls(
 def test_gex_shared_oscillator_timeline(
     browser_page: Page, calculator_url: str, width: int
 ) -> None:
-    """Verify all four real Plotly panels share ranges, zoom and reset."""
+    """Verify all five real Plotly panels share ranges, zoom and reset."""
     page = browser_page
-    page.set_viewport_size({"width": width, "height": 1200})
+    page.set_viewport_size({"width": width, "height": 1450})
     _ = page.goto(calculator_url + "/?analytics=1")
     page.get_by_role("button", name="Calculate", exact=True).click()
     expect(
@@ -106,8 +106,17 @@ def test_gex_shared_oscillator_timeline(
         const reference = Date.parse(plot.layout.shapes[0].x0);
         const margin = plot.data.find(trace =>
             trace.name === 'Margin loan growth momentum');
+        const spot = plot.data.find(trace => trace.type === 'candlestick');
+        const retests = plot.data.find(trace =>
+            trace.name === 'Retest confirmations');
         return Date.parse(plot.layout.xaxis.range[1]) === reference
-            && margin.x.every(time => Date.parse(time) <= reference);
+            && margin.x.every(time => Date.parse(time) <= reference)
+            && spot.x.length > 0
+            && spot.x.every(time => Date.parse(time) <= reference)
+            && retests.x.length > 0
+            && retests.x.every(time => Date.parse(time) <= reference)
+            && retests.text.includes('High retest confirmed')
+            && retests.text.includes('Low retest confirmed');
     }""")
     select(page, "Oscillator data time", "Latest available")
     expect(
@@ -115,15 +124,15 @@ def test_gex_shared_oscillator_timeline(
     ).to_be_visible()
     assert chart.evaluate("""plot => {
         return plot.data.every(trace => trace.xaxis === 'x')
-            && ['yaxis', 'yaxis2', 'yaxis3', 'yaxis4'].every(key =>
+            && ['yaxis', 'yaxis2', 'yaxis3', 'yaxis4', 'yaxis5'].every(key =>
                 plot._fullLayout[key].anchor === 'x')
-            && new Set(plot.data.map(trace => trace.yaxis)).size === 4
+            && new Set(plot.data.map(trace => trace.yaxis)).size === 5
             && plot.layout.shapes.some(shape => shape.yref === 'paper'
                 && shape.y0 === 0 && shape.y1 === 1 && shape.x0 === shape.x1);
     }""")
     # Move through each panel at the same horizontal position. The cursor must
     # span the entire figure, including panels with different sampling times.
-    for axis in ("yaxis", "yaxis2", "yaxis3", "yaxis4"):
+    for axis in ("yaxis", "yaxis2", "yaxis3", "yaxis4", "yaxis5"):
         position = object_mapping(
             cast(
                 "object",
@@ -191,6 +200,15 @@ def test_gex_shared_oscillator_timeline(
         == baseline_ranges
     )
     assert chart.screenshot(animations="disabled") == baseline
+    lookback = page.get_by_role("spinbutton", name="Retest lookback candles")
+    expect(lookback).to_have_value("48")
+    lookback.fill("2")
+    lookback.press("Enter")
+    _ = page.wait_for_function("""() =>
+        [...document.querySelectorAll('.js-plotly-plot')].some(plot =>
+            plot.data?.find(trace => trace.name === 'Retest confirmations')
+                ?.y.some(price => price === 80100 || price === 79900))
+    """)
     expect(page.get_by_test_id("stException")).to_have_count(0)
     assert_accessible(page)
 
@@ -229,7 +247,7 @@ def test_snapshot_tunnel_controls(
     ).to_be_disabled()
     expect(
         page.get_by_text(
-            "Enabled oscillators use stored receipts.", exact=False
+            "Book, margin and OI use stored receipts.", exact=False
         )
     ).to_be_visible()
     expect(page.get_by_test_id("stFileUploader")).to_have_count(0)
@@ -534,6 +552,47 @@ def test_local_archive_default_path(
                     Number(value[1].replaceAll(',', ''));
             });
         }""") is True
+    sidebar = page.get_by_test_id("stSidebar")
+    sidebar.get_by_text("Show Retest oscillator", exact=True).click()
+    expect(
+        sidebar.get_by_role("spinbutton", name="Retest lookback candles")
+    ).to_have_value("48")
+    _ = page.wait_for_function("""() =>
+        [...document.querySelectorAll('.js-plotly-plot')].some(plot => {
+            const candle = plot.data?.find(trace =>
+                trace.name === 'Retest · Bybit spot · 1h');
+            const book = plot.data?.find(trace =>
+                trace.name === 'Limit-order oscillator');
+            const signals = plot.data?.find(trace =>
+                trace.name === 'Retest confirmations');
+            return candle && book && signals && candle.yaxis === 'y7'
+                && candle.xaxis === book.xaxis && candle.x.length > 1
+                && Date.parse(candle.x[1]) - Date.parse(candle.x[0]) === 3600000
+                && signals.text.includes('High retest confirmed');
+        })
+    """)
+    sidebar.get_by_text("Confirm with Retest oscillator", exact=True).click()
+    expect(page.get_by_text("Active sources: 2.", exact=False)).to_be_visible()
+    _ = page.wait_for_function("""() =>
+        [...document.querySelectorAll('.js-plotly-plot')].some(plot =>
+            ['Retest confirms long', 'Retest confirms short'].every(name =>
+                plot.data?.some(trace => trace.name === name
+                    && trace.x.length > 0
+                    && trace.x.every(time =>
+                        new Date(time).getUTCMinutes() <= 10))))
+    """)
+    select(page, "Retest price interval", "1m")
+    select(page, "Retest confirmation mode", "Either level → long and short")
+    _ = page.wait_for_function("""() =>
+        [...document.querySelectorAll('.js-plotly-plot')].some(plot => {
+            const long = plot.data?.find(t =>
+                t.name === 'Retest confirms long');
+            const short = plot.data?.find(t =>
+                t.name === 'Retest confirms short');
+            return long?.x.length && JSON.stringify(long.x) ===
+                JSON.stringify(short?.x);
+        })
+    """)
     assert_accessible(page)
 
 

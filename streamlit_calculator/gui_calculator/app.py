@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -51,6 +51,7 @@ from gui_calculator.options_gex import (
     OptionsDisplay,
     render_options_gex_strategy,
 )
+from gui_calculator.snapshot_retest import retest_votes, strategy_retest_history
 from gui_calculator.tunnel_backtest import simulate_tunnel
 from gui_calculator.tunnel_replay import replay_tunnel
 from gui_calculator.ui_controls import WEEKDAYS, render_sidebar
@@ -545,6 +546,11 @@ def _render_bot_config(settings: CalculatorSettings) -> None:
         "Exports the current Snapshot tunnel parameters for the separate"
         " local-paper CLI bot."
     )
+    if settings.tunnel.use_retest:
+        _ = st.info(
+            "Turn off Retest confirmation to export a paper bot config."
+        )
+        return
     config = paper_bot_config(settings)
     content, error = _serialize_bot_config(config)
     if st.button(
@@ -582,6 +588,9 @@ def paper_bot_config(settings: CalculatorSettings) -> PaperBotConfig:
         or settings.gex_hypothesis != GexHypothesis.TUNNEL
     ):
         msg = "Only Snapshot tunnel is supported."
+        raise ValueError(msg)
+    if settings.tunnel.use_retest:
+        msg = "Retest confirmation is available in replay only."
         raise ValueError(msg)
     return PaperBotConfig(
         strategy_mode=TUNNEL_MODE,
@@ -719,7 +728,8 @@ def _prepare_options_strategy(
     """
     history = load_tunnel_history(settings)
     snapshots = history.snapshots
-    flow = history.flow
+    retest = strategy_retest_history(data, settings=settings.retest)
+    flow = replace(history.flow, retest=retest_votes(retest))
     result = replay_tunnel(
         data,
         snapshots,
@@ -737,7 +747,10 @@ def _prepare_options_strategy(
         st,
         result,
         content=_profile_snapshots(settings, snapshots, data),
-        display=OptionsDisplay(level_range=settings.tunnel.level_range),
+        display=OptionsDisplay(
+            level_range=settings.tunnel.level_range,
+            retest=retest,
+        ),
         observed_history=_observed_chart_history(settings, data),
     )
     _ = st.caption(

@@ -54,6 +54,7 @@ class TunnelSettings:
     use_margin: bool = False
     margin_source: Literal["bitget_growth"] = "bitget_growth"
     use_oi: bool = False
+    use_retest: bool = False
     oi_mode: OiConfirmationMode = OiConfirmationMode.DIVERGENCE
     oi_momentum_minimum: float = 1.0
     votes: int = 1
@@ -86,7 +87,7 @@ class TunnelSettings:
             msg = "Tunnel distances must be finite and between zero and one."
             raise ValueError(msg)
         if self.votes < 1 and any(
-            (self.use_book, self.use_margin, self.use_oi)
+            (self.use_book, self.use_margin, self.use_oi, self.use_retest)
         ):
             msg = "Trading requires at least one confirmation."
             raise ValueError(msg)
@@ -100,7 +101,9 @@ class TunnelSettings:
         if (
             not 0
             <= self.votes
-            <= sum((self.use_book, self.use_margin, self.use_oi))
+            <= sum(
+                (self.use_book, self.use_margin, self.use_oi, self.use_retest)
+            )
         ):
             msg = "Required confirmations must fit the enabled oscillators."
             raise ValueError(msg)
